@@ -37,9 +37,9 @@
 chargeTaxonomy <- function(AIT.anndata,
                            check.taxonomy = TRUE,
                            subsample      = 100000000,
-                           charge.file.name = paste0(AIT.anndata$title,"_CHARGE.RData",
-						   seed = 42)
-){
+                           charge.file.name = paste0(AIT.anndata$uns$title,"_CHARGE.RData"),
+                           seed = 42)
+{
   #############################################################
   print("===== Checking taxonomy, if requested =====")
   if(check.taxonomy){
@@ -66,7 +66,7 @@ chargeTaxonomy <- function(AIT.anndata,
     print("Counts do not appear to be log-normalized; assuming X holds counts.")
     norm_counts = log2CPM_byRow(cell_counts)
   }
-
+  
   #############################################################
   print("===== Collecting required cluster information =====")
   # hierarchy
@@ -83,39 +83,39 @@ chargeTaxonomy <- function(AIT.anndata,
     cluster_info = AIT.anndata$obs
   }
   cluster_info = cluster_info[match(all_clusters,cluster_info[,hierarchy[1]]),hierarchy]
-
+  
   # Rename anything called "_id" or "_label" to avoid breaking shiny
   hierarchy_old <- hierarchy
   hierarchy <- gsub("_id","",hierarchy)
   hierarchy <- gsub("_label","",hierarchy)
   colnames(cluster_info) <- hierarchy
   names(hierarchy_old) <- hierarchy
-
+  
   # Subsample vector
   set.seed(seed)
   keep_sample <- subsampleCells(cluster_vector,subsample)
   if(mean(keep_sample)<1 ){
-    cell_counts    <- cell_counts[,keep_sample]
-	norm_counts    <- norm_counts[,keep_sample]
+    cell_counts    <- cell_counts[keep_sample,]
+    norm_counts    <- norm_counts[keep_sample,]
     cluster_vector <- cluster_vector[keep_sample]
   }
   
   print("===== Building statistics =====")
-
+  
   # Building sums, counts, and props from the COUNT MATRIX
   print("... transpose count matrix")
   t_cell_counts  <- as(Matrix::t(cell_counts),"dgCMatrix")
   cluster_factor <- factor(cluster_vector,levels=all_clusters)
   rownames(t_cell_counts) <- colnames(AIT.anndata)
   colnames(t_cell_counts) <- names(cluster_factor) <- rownames(AIT.anndata)[keep_sample]
-
+  
   # Building means and sds from LOG2CPM
   print("... transpose logCPM matrix")
   t_norm_counts  <- as(Matrix::t(norm_counts),"dgCMatrix")
   rownames(t_norm_counts) <- colnames(AIT.anndata)
   colnames(t_norm_counts) <- names(cluster_factor) <- rownames(AIT.anndata)[keep_sample]
   
-
+  
   count_n <- as.numeric(table(cluster_factor))
   names(count_n) <- all_clusters
   print("... sums")
@@ -128,8 +128,8 @@ chargeTaxonomy <- function(AIT.anndata,
   means   <- get_cl_means(t_norm_counts,cluster_factor)
   print("... sds")
   sds     <- sqrt(get_cl_vars(t_norm_counts,cluster_factor,means))
-
-
+  
+  
   #############################################################
   print("===== Add cluster ids and colors =====")
   ## Add ids and colors to the cluster information
@@ -148,12 +148,12 @@ chargeTaxonomy <- function(AIT.anndata,
   for (i in 2:length(hierarchy)){
     print(paste(hierarchy[i],"........",i,"of",length(hierarchy)))
     cluster_vector2 = AIT.anndata$obs[,hierarchy[i]][keep_sample]
-	all_clusters2   = unique(cluster_vector2)
+    all_clusters2   = unique(cluster_vector2)
     if(is.factor(all_clusters2)) 
       all_clusters2 = levels(all_clusters2)
-	cluster_factor2 <- factor(cluster_vector2,levels=all_clusters2)
-	names(cluster_factor2) <- names(cluster_factor)
-	
+    cluster_factor2 <- factor(cluster_vector2,levels=all_clusters2)
+    names(cluster_factor2) <- names(cluster_factor)
+    
     nm      <- names(count_n)
     count_n <- c(count_n,as.numeric(table(cluster_factor2)))
     names(count_n) <- c(nm,all_clusters2)
@@ -164,7 +164,7 @@ chargeTaxonomy <- function(AIT.anndata,
     print("... props")
     props   <- cbind(props,t(t(counts)/as.numeric(count_n)))
     print("... means")
-	means2  <- get_cl_means(t_norm_counts,cluster_factor2)
+    means2  <- get_cl_means(t_norm_counts,cluster_factor2)
     means   <- cbind(means,means2)
     print("... sds")
     sds     <- cbind(sds,sqrt(get_cl_vars(t_norm_counts,cluster_factor2,means2)))
@@ -186,7 +186,7 @@ chargeTaxonomy <- function(AIT.anndata,
   #count_n2 <- addHierarchyToStat(rbind(count_n,count_n),hierarchy,cluster_info,"sum")
   #count_n  <- setNames(as.numeric(count_n2[1,]),colnames(count_n2))
   
- 
+  
   #############################################################
   print("===== Create input files for constellation plots =====")
   
@@ -220,17 +220,17 @@ chargeTaxonomy <- function(AIT.anndata,
   
   ###############################
   # dimension reduction USING CINDY'S CODE
-
+  
   select.markers = colnames(norm_counts)[top.genes]  # Replacing the super slow de.genes code for now.
-
+  
   rd.dat = rd_PCA(t_norm_counts,
-                select.genes=select.markers, 
-                select.cells=rownames(norm_counts), 
-                max.pca = 50,
-                method = "elbow",
-                sampled.cells=rownames(norm_counts), 
-                th=0.5)
-
+                  select.genes=select.markers, 
+                  select.cells=rownames(norm_counts), 
+                  max.pca = 50,
+                  method = "elbow",
+                  sampled.cells=rownames(norm_counts), 
+                  th=0.5)
+  
   rd.dat <- rd.dat$rd.dat
   # rd.dat is used as input for knn graph
   
@@ -250,6 +250,7 @@ chargeTaxonomy <- function(AIT.anndata,
     umap.df <- as.data.frame(umap.df)
   }
   print(3)
+  umap.df <- umap.df[keep_sample,]
   rownames(umap.df) <- rownames(rd.dat)
   print(4)
   
@@ -257,7 +258,7 @@ chargeTaxonomy <- function(AIT.anndata,
   constellation <- list()
   for (level in hierarchy){
     print(paste("... creating constellation for",level))
-    cl.cl  = AIT.anndata$obs[,hierarchy_old[level]]
+    cl.cl  = AIT.anndata$obs[keep_sample,hierarchy_old[level]]
     names(cl.cl) = rownames(rd.dat)
     result = get_knn_graph(rd.dat, cl=cl.cl, k =50) 
     
@@ -273,15 +274,15 @@ chargeTaxonomy <- function(AIT.anndata,
     
     cl.center.df = as.data.frame(get_RD_cl_center(umap.df,cl.cl)) 
     cl.center.df$x <- cl.center.df$x + runif(length(cl.center.df$x), -0.000001, 0.000001)  # Small jitter
-	cl.center.df$y <- cl.center.df$y + runif(length(cl.center.df$y), -0.000001, 0.000001)  # Small jitter
-	
+    cl.center.df$y <- cl.center.df$y + runif(length(cl.center.df$y), -0.000001, 0.000001)  # Small jitter
+    
     ## Define cl.df
     types <- rownames(cl.center.df)
     cl.df <- cluster_info[,paste0(level,c("_id","_label","_color"))]
     cl.df <- cl.df[match(unique(cl.df[,1]),cl.df[,1]),]
     rownames(cl.df) <- cl.df[,2]
     cl.df <- cl.df[types,]
-    cl.df$cluster_size <- count_n[types] #as.numeric(table(AIT.anndata$obs[,hierarchy[1]])[cl.df[,2]]) #count_n[types]
+    cl.df$cluster_size <- count_n[types] #as.numeric(table(AIT.anndata$obs[keep_sample,hierarchy[1]])[cl.df[,2]]) #count_n[types]
     
     ## Define cl.center.df (centroids for clusters)
     cl.center.df$cluster_id    <- cl.df[,1]  # id column
@@ -303,23 +304,23 @@ chargeTaxonomy <- function(AIT.anndata,
     tmp.knn.cl.df = select.knn.cl.df %>% filter(cl.from %in% tmp.cl & cl.to %in% tmp.cl)
     
     # Create the plot
-	#cl.center.df$cl <- rownames(cl.center.df)
+    #cl.center.df$cl <- rownames(cl.center.df)
     c.plot=try(plot_constellation(tmp.knn.cl.df, 
-                              cl.center.df=cl.center.df, 
-                              out.dir=NULL,
-                              prefix=prefix,
-                              node.label="cluster_label",
-                              exxageration=2,
-                              plot.parts=FALSE,
-                              return.list = T,
-                              node.dodge = F,
-                              label_repel = TRUE,
-                              label.size = 3,
-                              plot.height = 15,
-                              plot.width = 15,
-                              max_size = 5,
-                              enable_plotly = TRUE,
-                              plotly_labels_on_plot = TRUE))
+                                  cl.center.df=cl.center.df, 
+                                  out.dir=NULL,
+                                  prefix=prefix,
+                                  node.label="cluster_label",
+                                  exxageration=2,
+                                  plot.parts=FALSE,
+                                  return.list = T,
+                                  node.dodge = F,
+                                  label_repel = TRUE,
+                                  label.size = 3,
+                                  plot.height = 15,
+                                  plot.width = 15,
+                                  max_size = 5,
+                                  enable_plotly = TRUE,
+                                  plotly_labels_on_plot = TRUE))
     if(class(c.plot)[1]=="try-error") {
       constellation[[level]] <- plot_ly() %>%
         add_annotations(
@@ -357,4 +358,3 @@ chargeTaxonomy <- function(AIT.anndata,
   )
   
 }
-
