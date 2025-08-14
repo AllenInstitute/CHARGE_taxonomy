@@ -80,6 +80,36 @@ loadTaxonomy = function(taxonomyDir = getwd(),
 
 
 
+
+
+#' Convert a matrix of raw counts to a matrix of log2(Counts per Million + 1) values 
+#' 
+#' The input can be a base R matrix or a sparse matrix from the Matrix package.  (note: this is a copy of the scrattch.taxonomy function of the same name)
+#' 
+#' This function expects that columns correspond to genes, and rows to samples by default and is equivalent to running logCPM with cells.as.rows=TRUE (but a bit faster).  By default the offset is 1, but to calculate just log2(counts per Million) set offset to 0.
+#' 
+#' @param counts A matrix, dgCMatrix, or dgTMatrix of count values
+#' @param sf vector of numeric values representing the total number of reads. If count matrix includes all genes, value calulated by default (sf=NULL) will be accurate; however, if count matrix represents only a small fraction of genes, we recommend also providing this value.
+#' @param denom Denominator that all counts will be scaled to. The default (1 million) is commonly used, but 10000 is also common for sparser droplet-based sequencing methods.
+#' @param offset The constant offset to add to each cpm value prior to taking log2 (default = 1)
+#' 
+#' @return a dgCMatrix of log2(CPM + 1) values
+#' 
+#' @export 
+log2CPM_byRow <- function (counts, sf = NULL, denom = 1e+06, offset=1){
+  if(!("dgCMatrix" %in% as.character(class(counts))))
+    counts <- as(counts, "dgCMatrix")
+  if (is.null(sf)) {
+    sf <- Matrix::rowSums(counts)
+  }
+  sf <- sf/denom
+  normalized.expr   <- counts
+  normalized.expr@x <- counts@x/sf[as.integer(counts@i + offset)]
+  normalized.expr@x <- log2(normalized.expr@x+1)
+  return(normalized.expr)
+}
+
+
 #' Reorder annotations to have the same order and colors as what is shown in a separate metadata file
 #'
 #' @param anno an existing annotation data frame on which auto_annotate has ALREADY BEEN RUN
@@ -306,6 +336,8 @@ addHierarchyToStat <- function(stat, hierarchy, cluster_info, fn="mean"){
 #' @param color_order The order in which colors should be assigned. Options are
 #'   "sort" and "random". "sort" assigns colors in order; "random" will randomly
 #'   assign colors.
+#'   
+#' @import dplyr
 #'
 #' @return A modified data frame: the annotated column will be renamed
 #'   base_label, and base_id and base_color columns will be appended
@@ -424,10 +456,8 @@ group_annotations <- function(df, sample_col = "cell_id", keep_order = TRUE) {
 #' @param k Number of nearest neighbors (default=50 to align with example)
 #' @param ... Other variables that I'm not sure what they are and should probably be left alone
 #'
-#' @return
+#' @return A list with three components: knn.result = the knn result; knn.cl.df = the data frame of cluster information, outlier = outlier information.
 #' @export
-#'
-#' @examples
 get_knn_graph <- function(rd.dat, 
                           cl, 
                           k=50, 
