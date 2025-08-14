@@ -5,22 +5,43 @@
 \title{Save an RData object for use with CHARGE app}
 \usage{
 chargeTaxonomy(
-  AIT.anndata,
-  check.taxonomy = TRUE,
+  AIT.anndata = NULL,
+  cell_counts = NULL,
+  norm_counts = NULL,
+  metadata = NULL,
+  hierarchy = NULL,
+  embedding = NULL,
+  variable.genes = NULL,
   subsample = 1e+08,
-  charge.file.name = paste0(AIT.anndata$title, "_CHARGE.RData", seed = 42)
+  weight.by = "cell",
+  charge.file.name = "CHARGE.RData",
+  seed = 42
 )
 }
 \arguments{
-\item{AIT.anndata}{A reference taxonomy anndata object.}
+\item{AIT.anndata}{A reference taxonomy anndata object.  If provided, must contain counts in X or raw$X, uns$hierarchy, and obs (with columns for the hierarchy), and can optionally contain both X and raw$X and default embeddings and variable genes.  See https://github.com/AllenInstitute/AllenInstituteTaxonomy for details on expected formatting. If provided, this variable takes priority over the variables for ingesting these items separately.}
 
-\item{check.taxonomy}{Should the function check if the input variable is a valid AIT taxonomy (default = TRUE)}
+\item{cell_counts}{A sparse matrix of read counts where ROWS are cells and COLUMNS are genes, and both row names containing gene names (symbols or IDs) and column names containing unique IDs are included. Ignored if AIT.anndata is provided.}
+
+\item{norm_counts}{OPTIONAL. If provided, a sparse matrix of log-normalized read counts where ROWS are cells and COLUMNS are genes, and both row names containing gene names (symbols or IDs) and column names containing unique IDs are included.  If not provided log2(CPM+1) is used. Ignored if AIT.anndata is provided.}
+
+\item{metadata}{A matrix of cell metadata where ROWS are cells, COLUMNS are any metadata but that must include columns for each cell type level in the hierarchy. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.}
+
+\item{hierarchy}{A character vector listing the columns corresponding to the cell hierarchy, with the highest resolution type (e.g., cluster) listed first and the lowest resolution type (e.g., class) listed last. Ignored if AIT.anndata is provided.}
+
+\item{embedding}{OPTIONAL. A matrix where ROWS are cells and the first two COLUMNS correspond to x and y dimensions of a two dimensional embedding (e.g., UMAP or tSNE), with values corresponding to the specific X,Y coordinates for the embedding. Any other columns are ignored. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.}
+
+\item{variable.genes}{OPTIONAL. A character vector of genes to use for calculating the embedding (if not provided) and the constellation diagram. Typically this corresponds to a set of variable or differentially expressed genes. Must be a subset of gene names included as column names for cell_counts. Ignored if AIT.anndata is provided.}
 
 \item{subsample}{How much subsampling should be done before running statistics. Default (recommended!) is none, but subsampling can be done to speed up calculations.}
+
+\item{weight.by}{Should statistics for higher levels of the hierarchy be weighted by "cell" (default), whereby each statistic is recalculated on all the cells in a given group for each level, or by "cluster", whereby statistics are averaged, counting each item from the first level of the hierarchy (e.g., cluster) evenly.}
 
 \item{charge.file.name}{File name (and path) to write CHARGE file to}
 
 \item{seed}{The seed to use for reproducibility}
+
+\item{check.taxonomy}{Should the function check if the input variable is a valid AIT taxonomy (default = TRUE)}
 }
 \description{
 Write an RData object with the following variables
@@ -32,17 +53,15 @@ Write an RData object with the following variables
 \item means - cell x cluster matrix where each value represents the average counts of that gene for that cluster
 \item sds - cell x cluster matrix where each value represents the standard deviation of counts of that gene for that cluster
 \item hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
-\item cluster_info
-NOTE: proportions are not provided because they can be calculated trivaially from the above variables
+\item cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
+\item constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
+\strong{NOTE: This function is tested on "docker://alleninst/scrattch:1.1.2". We strongly encourage using this docker environment.}
 }
 }
 \examples{
 \dontrun{
-  AIT.file    <- "HMBA_BG_Macaque_AIT.h5ad" #"Macaque_HMBA_basalganglia_AIT_pre-print.h5ad"
+  AIT.file    <- "https://allen-cell-type-taxonomies.s3.us-west-2.amazonaws.com/Human_MTG_SMART_seq_08082025.h5ad"
   AIT.anndata <- loadTaxonomy(AIT.file)
-  #raw = AIT.anndata$raw$X
-  #raw@x <- round(2^(raw@x)-1)
-  #AIT.anndata$raw$X@x <- raw@x  # This does not work
   chargeTaxonomy(AIT.anndata)
 }
 

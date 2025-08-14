@@ -1,5 +1,3 @@
-# This function is tested on scrattch docker 1.2
-
 #' Save an RData object for use with CHARGE app
 #' 
 #' Write an RData object with the following variables
@@ -10,111 +8,168 @@
 #'  - means - cell x cluster matrix where each value represents the average counts of that gene for that cluster 
 #'  - sds - cell x cluster matrix where each value represents the standard deviation of counts of that gene for that cluster
 #'  - hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
-#'  - cluster_info
-#'  NOTE: proportions are not provided because they can be calculated trivaially from the above variables
+#'  - cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
+#'  - constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
+#'  **NOTE: This function is tested on "docker://alleninst/scrattch:1.1.2". We strongly encourage using this docker environment.**
 #'
-#' @param AIT.anndata A reference taxonomy anndata object.
+#' @param AIT.anndata A reference taxonomy anndata object.  If provided, must contain counts in X or raw$X, uns$hierarchy, and obs (with columns for the hierarchy), and can optionally contain both X and raw$X and default embeddings and variable genes.  See https://github.com/AllenInstitute/AllenInstituteTaxonomy for details on expected formatting. If provided, this variable takes priority over the variables for ingesting these items separately.
+#' @param cell_counts A sparse matrix of read counts where ROWS are cells and COLUMNS are genes, and both row names containing gene names (symbols or IDs) and column names containing unique IDs are included. Ignored if AIT.anndata is provided.
+#' @param norm_counts OPTIONAL. If provided, a sparse matrix of log-normalized read counts where ROWS are cells and COLUMNS are genes, and both row names containing gene names (symbols or IDs) and column names containing unique IDs are included.  If not provided log2(CPM+1) is used. Ignored if AIT.anndata is provided.
+#' @param metadata A matrix of cell metadata where ROWS are cells, COLUMNS are any metadata but that must include columns for each cell type level in the hierarchy. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.
+#' @param hierarchy A character vector listing the columns corresponding to the cell hierarchy, with the highest resolution type (e.g., cluster) listed first and the lowest resolution type (e.g., class) listed last. Ignored if AIT.anndata is provided.
+#' @param embedding OPTIONAL. A matrix where ROWS are cells and the first two COLUMNS correspond to x and y dimensions of a two dimensional embedding (e.g., UMAP or tSNE), with values corresponding to the specific X,Y coordinates for the embedding. Any other columns are ignored. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.
+#' @param variable.genes OPTIONAL. A character vector of genes to use for calculating the embedding (if not provided) and the constellation diagram. Typically this corresponds to a set of variable or differentially expressed genes. Must be a subset of gene names included as column names for cell_counts. Ignored if AIT.anndata is provided.
 #' @param check.taxonomy Should the function check if the input variable is a valid AIT taxonomy (default = TRUE)
 #' @param subsample How much subsampling should be done before running statistics. Default (recommended!) is none, but subsampling can be done to speed up calculations.
+#' @param weight.by Should statistics for higher levels of the hierarchy be weighted by "cell" (default), whereby each statistic is recalculated on all the cells in a given group for each level, or by "cluster", whereby statistics are averaged, counting each item from the first level of the hierarchy (e.g., cluster) evenly.
 #' @param charge.file.name File name (and path) to write CHARGE file to
 #' @param seed The seed to use for reproducibility
 #' 
 #' @import scrattch.taxonomy
-#' @import rsvd
 #' @import Matrix
 #' 
 #' @examples
 #' \dontrun{
-#'   AIT.file    <- "HMBA_BG_Macaque_AIT.h5ad" #"Macaque_HMBA_basalganglia_AIT_pre-print.h5ad"
+#'   AIT.file    <- "https://allen-cell-type-taxonomies.s3.us-west-2.amazonaws.com/Human_MTG_SMART_seq_08082025.h5ad"
 #'   AIT.anndata <- loadTaxonomy(AIT.file)
-#'   #raw = AIT.anndata$raw$X
-#'   #raw@x <- round(2^(raw@x)-1)
-#'   #AIT.anndata$raw$X@x <- raw@x  # This does not work
 #'   chargeTaxonomy(AIT.anndata)
 #' }
 #'
 #' @export
-chargeTaxonomy <- function(AIT.anndata,
-                           check.taxonomy = TRUE,
-                           subsample      = 100000000,
-                           charge.file.name = paste0(AIT.anndata$uns$title,"_CHARGE.RData"),
+chargeTaxonomy <- function(AIT.anndata = NULL,
+                           cell_counts = NULL,      # ignored in AIT.anndata is provided
+                           norm_counts = NULL,      # OPTIONAL; ignored in AIT.anndata is provided
+                           metadata    = NULL,      # ignored in AIT.anndata is provided
+                           hierarchy   = NULL,      # ignored in AIT.anndata is provided
+                           embedding   = NULL,      # OPTIONAL; ignored in AIT.anndata is provided
+                           variable.genes   = NULL, # OPTIONAL; ignored in AIT.anndata is provided
+                           subsample   = 100000000,
+                           weight.by   = "cell",
+                           charge.file.name = "CHARGE.RData",
                            seed = 42)
 {
   #############################################################
-  print("===== Checking taxonomy, if requested =====")
-  if(check.taxonomy){
-    AIT.anndata = checkTaxonomy(AIT.anndata)
-    if(!AIT.anndata$uns$valid) warning("Taxonomy does not pass taxonomy checks, potentially causing chargeTaxonomy to fail. Check the log file if needed.") 
+  print("===== Setting up variables =====")
+  
+  ##########################
+  # metadata
+  print("... read metadata and underlying hierarchy.")
+  if(!is.null(AIT.anndata)){
+    metadata <- AIT.anndata$obs
   } else {
-    warning("Taxonomy is not being checked. If chargeTaxonomy fails, we recommend running checkTaxonomy to ensure valid AIT file.")
+    if(is.null(metadata)) error("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
   }
   
-  cell_counts <- AIT.anndata$raw$X
-  if(is.null(cell_counts)){
-    cell_counts <- AIT.anndata$X
-    if(is.null(cell_counts)){
-      error("chargeTaxonomy required raw counts in the raw$X slot or the X to run.")
-    }
-  }
-  
-  norm_counts <- AIT.anndata$X
-  if(is.null(norm_counts)){
-    print("Creating normalized count matrix from cell_counts.")
-    norm_counts = log2CPM_byRow(cell_counts)
-  }
-  if(max(norm_counts)>100){
-    print("Counts do not appear to be log-normalized; assuming X holds counts.")
-    norm_counts = log2CPM_byRow(cell_counts)
-  }
-  
-  #############################################################
-  print("===== Collecting required cluster information =====")
+  ##########################
   # hierarchy
-  hierarchy = names(AIT.anndata$uns$hierarchy)[order(-as.numeric(AIT.anndata$uns$hierarchy))]
+  if(!is.null(AIT.anndata)){
+    hierarchy = names(AIT.anndata$uns$hierarchy)[order(-as.numeric(AIT.anndata$uns$hierarchy))]
+  } else {
+    if(is.null(hierarchy)) error("AIT.anndata or hierarchy must be provided to run chargeTaxonomy.")
+  }
   
+  ##########################
   # cluster_info
-  cluster_vector = AIT.anndata$obs[,hierarchy[1]]
+  print("... define cluster information.")
+  cluster_vector = metadata[,hierarchy[1]]
   all_clusters   = unique(cluster_vector)
   if(is.factor(all_clusters)) 
     all_clusters = levels(all_clusters)
-  if(!is.null(AIT.anndata$uns$cluster_info)){
-    cluster_info = AIT.anndata$uns$cluster_info
-  } else {
-    cluster_info = AIT.anndata$obs
-  }
-  cluster_info = cluster_info[match(all_clusters,cluster_info[,hierarchy[1]]),hierarchy]
+  cluster_info = metadata[match(all_clusters,metadata[,hierarchy[1]]),hierarchy]
   
-  # Rename anything called "_id" or "_label" to avoid breaking shiny
+  # Rename anything called "_id" or "_label" to avoid breaking some scripts
   hierarchy_old <- hierarchy
   hierarchy <- gsub("_id","",hierarchy)
   hierarchy <- gsub("_label","",hierarchy)
   colnames(cluster_info) <- hierarchy
   names(hierarchy_old) <- hierarchy
   
+  ##########################
+  # cluster colors/ids
+  print("... add cluster ids and colors ")
+  ## NOTE: I'LL NEED TO UPDATE THIS PART ONCE I SORT OUT HOW TO EMBED CLUSTER 
+  ##       COLORS (AND CLUSTER ORDER?) WITHIN THE CLUSTER_INFO DATA FRAME
+  cluster_info$sample_name = paste0("i",1:dim(cluster_info)[1])
+  for (i in 1:dim(cluster_info)[2]){
+    cluster_info[,i] <- factor(cluster_info[,i],levels = unique(cluster_info[,i]))
+  }    
+  cluster_info <- auto_annotate(cluster_info)
+  
+  ##########################
   # Subsample vector
+  print("... define subsampling, if any.")
   set.seed(seed)
   keep_sample <- subsampleCells(cluster_vector,subsample)
+  
+  ##########################
+  # cell_counts
+  print("... read and format cell counts.")
+  if(!is.null(AIT.anndata)){
+    cell_counts <- AIT.anndata$raw$X
+    if(is.null(cell_counts)){
+      cell_counts <- AIT.anndata$X
+      if(is.null(cell_counts)){
+        error("chargeTaxonomy requires raw counts in the raw$X slot or the X to run.")
+      }
+    }
+    rownames(cell_counts) <- rownames(AIT.anndata)
+    colnames(cell_counts) <- colnames(AIT.anndata)
+  } else {
+    if(is.null(cell_counts)) error("AIT.anndata or cell_counts must be provided to run chargeTaxonomy.")
+  }
+  all.sample.names = rownames(cell_counts)
+  all.genes        = colnames(cell_counts)
+  
+  ##########################
+  # norm_counts
+  print("... read and format normalized expression matrix.")
+  if(!is.null(AIT.anndata)){
+    norm_counts <- AIT.anndata$X
+    if(is.null(norm_counts)){
+      print("Creating normalized count matrix from cell_counts.")
+      norm_counts = log2CPM_byRow(cell_counts)
+    }
+    if(max(norm_counts)>100){
+      print("Counts do not appear to be log-normalized; assuming X holds counts.")
+      norm_counts = log2CPM_byRow(cell_counts)
+    }
+  } else {
+    if(is.null(cell_counts))
+      norm_counts = log2CPM_byRow(cell_counts)
+  }
+  rownames(norm_counts) <- all.sample.names
+  colnames(norm_counts) <- all.genes 
+  
+  #########################
+  # subset variables and define cluster_factor
   if(mean(keep_sample)<1 ){
-    cell_counts    <- cell_counts[keep_sample,]
-    norm_counts    <- norm_counts[keep_sample,]
+    print("... subsample count matrix")
+    cell_counts  <- cell_counts[keep_sample,]
+    norm_counts  <- norm_counts[keep_sample,]
+    sample.names <- all.sample.names[keep_sample]
     cluster_vector <- cluster_vector[keep_sample]
   }
+  cluster_factor <- factor(cluster_vector,levels=all_clusters)
+  names(cluster_factor) <- sample.names
   
-  print("===== Building statistics =====")
   
-  # Building sums, counts, and props from the COUNT MATRIX
+  ##########################
+  # define transposes
   print("... transpose count matrix")
   t_cell_counts  <- as(Matrix::t(cell_counts),"dgCMatrix")
-  cluster_factor <- factor(cluster_vector,levels=all_clusters)
-  rownames(t_cell_counts) <- colnames(AIT.anndata)
-  colnames(t_cell_counts) <- names(cluster_factor) <- rownames(AIT.anndata)[keep_sample]
+  rownames(t_cell_counts) <- all.genes
+  colnames(t_cell_counts) <- sample.names
   
-  # Building means and sds from LOG2CPM
   print("... transpose logCPM matrix")
   t_norm_counts  <- as(Matrix::t(norm_counts),"dgCMatrix")
-  rownames(t_norm_counts) <- colnames(AIT.anndata)
-  colnames(t_norm_counts) <- names(cluster_factor) <- rownames(AIT.anndata)[keep_sample]
+  rownames(t_norm_counts) <- all.genes
+  colnames(t_norm_counts) <- sample.names
   
+  
+  
+  
+  #############################################################
+  print("===== Building cluster-level statistics =====")
   
   count_n <- as.numeric(table(cluster_factor))
   names(count_n) <- all_clusters
@@ -122,7 +177,7 @@ chargeTaxonomy <- function(AIT.anndata,
   sums    <- round(get_cl_sums(t_cell_counts,cluster_factor))
   print("... counts")
   counts  <- round(get_cl_sums(t_cell_counts>0,cluster_factor))
-  print("... props")
+  print("... props (calculated above)")
   props   <- t(t(counts)/as.numeric(count_n))
   print("... means")
   means   <- get_cl_means(t_norm_counts,cluster_factor)
@@ -131,134 +186,123 @@ chargeTaxonomy <- function(AIT.anndata,
   
   
   #############################################################
-  print("===== Add cluster ids and colors =====")
-  ## Add ids and colors to the cluster information
-  ## NOTE: I'LL NEED TO UPDATE THIS PART ONCE I SORT OUT HOW TO EMBED CLUSTER COLORS
-  ## (AND CLUSTER ORDER?) WITHIN THE CLUSTER_INFO DATA FRAME
-  cluster_info$sample_name = paste0("i",1:dim(cluster_info)[1])
-  for (i in 1:dim(cluster_info)[2]){
-    cluster_info[,i] <- factor(cluster_info[,i],levels = unique(cluster_info[,i]))
-  }    
-  cluster_info <- auto_annotate(cluster_info)
+  print("===== Calculate distances and embeddings =====")
+  
+  ##########################
+  # variable.genes
+  print("... read in or calculate variable genes.")
+  if(!is.null(AIT.anndata)){
+    if(is.null(AIT.anndata$var$highly_variable_genes_standard)){
+      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
+      betaScore      <- sort(betaScore)
+      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
+    } else {
+      variable.genes <- all.genes[AIT.anndata$var$highly_variable_genes_standard]
+    }
+  } else {
+    if(is.null(variable.genes)) {
+      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
+      betaScore      <- sort(betaScore)
+      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
+    }
+  }
+  variable.genes <- intersect(variable.genes,all.genes)
+  if(length(variable.genes)<50) error("<50 valid variable.genes, potentially due to misalignment between count matrix column names and variable.genes input. chargeTaxonomy cannot run with so few valid genes.")
+  
+  ##########################
+  # principal components
+  print("... calculate principal components.")
+  rd.dat = rd_PCA(t_norm_counts,
+                  select.genes=variable.genes, 
+                  select.cells=sample.names, 
+                  max.pca = 50,
+                  method = "elbow",
+                  sampled.cells=sample.names, 
+                  th=0.5)
+  rd.dat <- rd.dat$rd.dat
+  rownames(rd.dat) <- sample.names
+  # rd.dat is used as input for knn graph and (if needed) the umap
+  
+  ##########################
+  # embedding
+  print("... read in or calculate UMAP")
+  if(!is.null(AIT.anndata)){
+    embedding <- NULL
+    if(length(AIT.anndata$obsm)>0){
+      embedding <- AIT.anndata$uns$default_embedding[[1]]
+      if(is.null(embedding)) embedding = names(AIT.anndata$obsm)[1]
+    }
+    if(length(embedding)==1){
+      umap.df <- AIT.anndata$obsm[[embedding]][sample.names,]
+    } else {
+      umap.df <- umap(rd.dat)$layout
+    }
+  } else {
+    if(is.null(embedding)) {
+      umap.df <- umap(rd.dat)$layout
+    } else {
+      umap.df <- embedding[sample.names,]
+    }
+  }
+  umap.df <- as.data.frame(umap.df)
+  rownames(umap.df) <- sample.names
   
   
   #############################################################
   print("===== Building statistics for the rest of the hierarchy =====")
-  # NOTE: THIS TREATS EACH CELL WITH THE SAME WEIGHT (e.g., BIGGER CLUSTER GET WEIGHTED HIGHER)
-  for (i in 2:length(hierarchy)){
-    print(paste(hierarchy[i],"........",i,"of",length(hierarchy)))
-    cluster_vector2 = AIT.anndata$obs[,hierarchy[i]][keep_sample]
-    all_clusters2   = unique(cluster_vector2)
-    if(is.factor(all_clusters2)) 
-      all_clusters2 = levels(all_clusters2)
-    cluster_factor2 <- factor(cluster_vector2,levels=all_clusters2)
-    names(cluster_factor2) <- names(cluster_factor)
-    
-    nm      <- names(count_n)
-    count_n <- c(count_n,as.numeric(table(cluster_factor2)))
-    names(count_n) <- c(nm,all_clusters2)
-    print("... sums")
-    sums    <- cbind(sums,round(get_cl_sums(t_cell_counts,cluster_factor2)))
-    print("... counts")
-    counts  <- cbind(counts,round(get_cl_sums(t_cell_counts>0,cluster_factor2)))
-    print("... props")
-    props   <- cbind(props,t(t(counts)/as.numeric(count_n)))
-    print("... means")
-    means2  <- get_cl_means(t_norm_counts,cluster_factor2)
-    means   <- cbind(means,means2)
-    print("... sds")
-    sds     <- cbind(sds,sqrt(get_cl_vars(t_norm_counts,cluster_factor2,means2)))
-  }
   
-  # NOTE: THIS SUMMARIZES EVERYTHING BY CLUSTER, TREATING EACH CLUSTER WITH THE SAME WEIGHT
-  # Uncomment this code and comment the code above if we want to do it this way
-  #print("Building sums:")
-  #sums   <- addHierarchyToStat(sums,hierarchy,cluster_info,"sum")
-  #print("Building counts:")
-  #counts <- addHierarchyToStat(counts,hierarchy,cluster_info,"sum")
-  #print("Building means:")
-  #means  <- addHierarchyToStat(means,hierarchy,cluster_info)
-  #print("Building sds:")
-  #sds    <- addHierarchyToStat(sds,hierarchy,cluster_info)
-  #print("Building props:")
-  #props  <- addHierarchyToStat(props,hierarchy,cluster_info)
-  #print("Building counts:")
-  #count_n2 <- addHierarchyToStat(rbind(count_n,count_n),hierarchy,cluster_info,"sum")
-  #count_n  <- setNames(as.numeric(count_n2[1,]),colnames(count_n2))
+  if(weight.by!="cluster"){
+    # NOTE: THIS TREATS EACH CELL WITH THE SAME WEIGHT (e.g., BIGGER CLUSTER GET WEIGHTED HIGHER)
+    if(weight.by!="cell") warning("weight.by is not set to 'cell' or 'cluster'; defaulting to 'cell'.")
+    for (i in 2:length(hierarchy)){
+      print(paste(hierarchy[i],"........",i,"of",length(hierarchy)))
+      cluster_vector2 = AIT.anndata$obs[,hierarchy[i]][keep_sample]
+      all_clusters2   = unique(cluster_vector2)
+      if(is.factor(all_clusters2)) 
+        all_clusters2 = levels(all_clusters2)
+      cluster_factor2 <- factor(cluster_vector2,levels=all_clusters2)
+      names(cluster_factor2) <- names(cluster_factor)
+      
+      nm      <- names(count_n)
+      count_n <- c(count_n,as.numeric(table(cluster_factor2)))
+      names(count_n) <- c(nm,all_clusters2)
+      print("... sums")
+      sums    <- cbind(sums,round(get_cl_sums(t_cell_counts,cluster_factor2)))
+      print("... counts")
+      counts  <- cbind(counts,round(get_cl_sums(t_cell_counts>0,cluster_factor2)))
+      print("... props")
+      props   <- cbind(props,t(t(counts)/as.numeric(count_n)))
+      print("... means")
+      means2  <- get_cl_means(t_norm_counts,cluster_factor2)
+      means   <- cbind(means,means2)
+      print("... sds")
+      sds     <- cbind(sds,sqrt(get_cl_vars(t_norm_counts,cluster_factor2,means2)))
+    }
+  } else {    
+    # NOTE: THIS SUMMARIZES EVERYTHING BY CLUSTER, TREATING EACH CLUSTER WITH THE SAME WEIGHT
+    print("Building sums:")
+    sums   <- addHierarchyToStat(sums,hierarchy,cluster_info,"sum")
+    print("Building counts:")
+    counts <- addHierarchyToStat(counts,hierarchy,cluster_info,"sum")
+    print("Building means:")
+    means  <- addHierarchyToStat(means,hierarchy,cluster_info)
+    print("Building sds:")
+    sds    <- addHierarchyToStat(sds,hierarchy,cluster_info)
+    print("Building props:")
+    props  <- addHierarchyToStat(props,hierarchy,cluster_info)
+    print("Building counts:")
+    count_n2 <- addHierarchyToStat(rbind(count_n,count_n),hierarchy,cluster_info,"sum")
+    count_n  <- setNames(as.numeric(count_n2[1,]),colnames(count_n2))
+  }
   
   
   #############################################################
-  print("===== Create input files for constellation plots =====")
+  print("===== Build the constellation plots =====")
   
-  # Create a reduced dimensionality matrix (essentially creating principal components)
-  # ---- We are starting from the normalized data here
-  # ---- Finally, we take the top 1000 highly variable genes
-  
-  ## Get the top variable genes
-  if(is.null(AIT.anndata$var$highly_variable_genes_standard)){
-    betaScore <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
-    betaScore <- sort(betaScore)
-    top.genes <- names(betaScore)[1:min(1000,length(betaScore))]
-  } else {
-    top.genes <- AIT.anndata$var$highly_variable_genes_standard
-  }
-  
-  
-  ## GET PCS (e.g., reduced dimension data frame)
-  print("... calculate principal components")
-  
-  # OLD WAY TO DO IT
-  #max_k_to_estimate   <- min(c(nrow(norm_counts),ncol(norm_counts),200))
-  #pca_result          <- rpca(norm_counts[,top.genes], k = max_k_to_estimate, center = TRUE, scale = TRUE)
-  #exp_variance_ratio  <- pca_result$sdev^2 / sum(pca_result$sdev^2)
-  #cumulative_variance <- cumsum(exp_variance_ratio)
-  #variance_threshold  <- 0.9
-  #n_components_chosen <- which.max(cumulative_variance >= variance_threshold)
-  #rd.dat              <- pca_result$x[,1:n_components_chosen]
-  #colnames(rd.dat)    <- paste0("PC",1:dim(rd.dat)[2])  
-  
-  
-  ###############################
-  # dimension reduction USING CINDY'S CODE
-  
-  select.markers = colnames(norm_counts)[top.genes]  # Replacing the super slow de.genes code for now.
-  
-  rd.dat = rd_PCA(t_norm_counts,
-                  select.genes=select.markers, 
-                  select.cells=rownames(norm_counts), 
-                  max.pca = 50,
-                  method = "elbow",
-                  sampled.cells=rownames(norm_counts), 
-                  th=0.5)
-  
-  rd.dat <- rd.dat$rd.dat
-  # rd.dat is used as input for knn graph
-  
-  ## GET THE UMAP
-  print("... read in or calculate UMAP")
-  embedding <- NULL
-  print(1)
-  if(length(AIT.anndata$obsm)>0){
-    embedding <- AIT.anndata$uns$default_embedding[[1]]
-    if(is.null(embedding)) embedding = names(AIT.anndata$obsm)[1]
-  }
-  print(2)
-  if(length(embedding)==1){
-    umap.df <- AIT.anndata$obsm[[embedding]]
-  } else {
-    umap.df <- umap(rd.dat)$layout
-    umap.df <- as.data.frame(umap.df)
-  }
-  print(3)
-  umap.df <- umap.df[keep_sample,]
-  rownames(umap.df) <- rownames(rd.dat)
-  print(4)
-  
-  ##  NOW BUILD THE CONSTELLATION
   constellation <- list()
   for (level in hierarchy){
     print(paste("... creating constellation for",level))
-    cl.cl  = AIT.anndata$obs[keep_sample,hierarchy_old[level]]
+    cl.cl  = metadata[keep_sample,hierarchy_old[level]]
     names(cl.cl) = rownames(rd.dat)
     result = get_knn_graph(rd.dat, cl=cl.cl, k =50) 
     
@@ -282,7 +326,7 @@ chargeTaxonomy <- function(AIT.anndata,
     cl.df <- cl.df[match(unique(cl.df[,1]),cl.df[,1]),]
     rownames(cl.df) <- cl.df[,2]
     cl.df <- cl.df[types,]
-    cl.df$cluster_size <- count_n[types] #as.numeric(table(AIT.anndata$obs[keep_sample,hierarchy[1]])[cl.df[,2]]) #count_n[types]
+    cl.df$cluster_size <- count_n[types]
     
     ## Define cl.center.df (centroids for clusters)
     cl.center.df$cluster_id    <- cl.df[,1]  # id column
@@ -291,8 +335,7 @@ chargeTaxonomy <- function(AIT.anndata,
     cl.center.df$cluster_size  <- cl.df$cluster_size
     rownames(cl.center.df)     <- rownames(cl.df)
     
-    # set cl as cluster_id since that was used to summarise the edges
-    #cl.center.df$cl = as.integer(as.character(row.names(cl.center.df) ))
+    # Set cl as cluster_id since that was used to summarise the edges
     cl.center.df$cl <- cl.df[,1]  # The _id column
     
     # Convert labels to ids 
@@ -304,7 +347,6 @@ chargeTaxonomy <- function(AIT.anndata,
     tmp.knn.cl.df = select.knn.cl.df %>% filter(cl.from %in% tmp.cl & cl.to %in% tmp.cl)
     
     # Create the plot
-    #cl.center.df$cl <- rownames(cl.center.df)
     c.plot=try(plot_constellation(tmp.knn.cl.df, 
                                   cl.center.df=cl.center.df, 
                                   out.dir=NULL,
@@ -343,7 +385,7 @@ chargeTaxonomy <- function(AIT.anndata,
   } 
   
   #############################################################
-  print("===== Save file =====")
+  print("===== Save CHARGE file =====")
   save(
     hierarchy,
     cluster_info,
@@ -358,3 +400,4 @@ chargeTaxonomy <- function(AIT.anndata,
   )
   
 }
+
