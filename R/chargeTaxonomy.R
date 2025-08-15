@@ -148,6 +148,8 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     norm_counts  <- norm_counts[keep_sample,]
     sample.names <- all.sample.names[keep_sample]
     cluster_vector <- cluster_vector[keep_sample]
+  } else {
+    sample.names <- all.sample.names
   }
   cluster_factor <- factor(cluster_vector,levels=all_clusters)
   names(cluster_factor) <- sample.names
