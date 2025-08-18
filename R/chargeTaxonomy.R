@@ -25,7 +25,6 @@
 #' @param charge.file.name File name (and path) to write CHARGE file to
 #' @param seed The seed to use for reproducibility
 #' 
-#' @import scrattch.taxonomy
 #' @import Matrix
 #' 
 #' @examples
@@ -55,6 +54,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   # metadata
   print("... read metadata and underlying hierarchy.")
   if(!is.null(AIT.anndata)){
+    library(anndata)
     metadata <- AIT.anndata$obs
   } else {
     if(is.null(metadata)) error("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
@@ -166,8 +166,6 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   t_norm_counts  <- as(Matrix::t(norm_counts),"dgCMatrix")
   rownames(t_norm_counts) <- all.genes
   colnames(t_norm_counts) <- sample.names
-  
-  
   
   
   #############################################################

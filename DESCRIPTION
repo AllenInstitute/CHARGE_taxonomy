@@ -1,19 +1,19 @@
-Package: scrattch.taxonomy
+Package: CHARGE_taxonomy
 Title: Generalized Allen Institute taxonomy building.
 Version: 0.1
 Authors@R: 
     person(given = "Jeremy",
            family = "Miller",
            role = c("aut", "cre"),
-           email = "jeremy.miller@alleninstitute.org")
+           email = "jeremym@alleninstitute.org")
 Description: Scripts used to generate CHARGE .Rmd files starting from AIT files
 License: GPL-3
 Depends: anndata,
-    scrattch.taxonomy,
     rsvd,
     Matrix,
     dplyr
 Suggests: lazyeval,
+    scrattch.taxonomy,
     grDevices,
     viridisLite
 Encoding: UTF-8
@@ -21,4 +21,4 @@ LazyData: true
 VignetteBuilder: knitr
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.2
-URL: https://alleninstitute.github.io/CHARGE_taxonomy/
+URL: https://github.com/AllenInstitute/CHARGE_taxonomy
