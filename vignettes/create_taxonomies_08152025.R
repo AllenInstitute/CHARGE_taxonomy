@@ -6,14 +6,18 @@
 
 
 #######################################################
-## Prior to running this script, download "chargeTaxonomy.R", "utils.R", and "constellation.R" from https://github.com/AllenInstitute/CHARGE_taxonomy into your working directory.  Then enter the above docker environment and navigate to the same working directory.
+## Prior to running this script, download "chargeTaxonomy.R", "utils.R", and "constellation.R" from https://github.com/AllenInstitute/CHARGE_taxonomy into your working directory or install this R library with `remotes::install_github("AllenInstitute/CHARGE_taxonomy")`.  Then enter the above docker environment and navigate to the same working directory.
 
 ## Load relevant libraries
 
 library(scrattch.taxonomy)  # Note, this loads all other relevant libraries.
+
+# Option 1: source CHARGE_taxonomy functions
 source("chargeTaxonomy.R")
 source("utils.R")
 source("constellation.R")
+# Option 2: load library
+library(CHARGE.taxonomy)
 
 ## Set-up global variables
 
