@@ -3,7 +3,7 @@ Cell HierARchy Gene Explorer (CHARGE) uses fast, cluster-centric approaches to f
 
 <img width="150" alt="CHARGE logo" src="https://github.com/AllenInstitute/CHARGE/blob/main/R/www/CHARGE_logo.png">
 
-**`CHARGE_taxonomy` is the GitHub repository and associated R library for generating RData files for CHARGE.**  Starting either from any taxonomy in [Allen Institute Taxonomy (AIT) format](https://github.com/AllenInstitute/AllenInstituteTaxonomy/) or from clustered and annotated cell x gene exoression data, `CHARGE_taxonomy` packages the relevant statistics and other variables into a .RData file required for CHARGE. 
+**`CHARGE_taxonomy` is the GitHub repository and associated R library for generating RData files for CHARGE.**  Starting either from any taxonomy in [Allen Institute Taxonomy (AIT) format](https://github.com/AllenInstitute/AllenInstituteTaxonomy/) or from clustered and annotated cell x gene expression data, `CHARGE_taxonomy` packages the relevant statistics and other variables into a .RData file required for CHARGE. 
 
 ## Installation
 
