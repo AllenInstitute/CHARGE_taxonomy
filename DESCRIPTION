@@ -1,4 +1,4 @@
-Package: CHARGE_taxonomy
+Package: CHARGE.taxonomy
 Title: Generalized Allen Institute taxonomy building.
 Version: 0.1
 Authors@R: 
