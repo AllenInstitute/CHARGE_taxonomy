@@ -31,3 +31,15 @@ chargeTaxonomy(AIT.anndata)
 See the [manual file](https://github.com/AllenInstitute/CHARGE_taxonomy/blob/main/man/chargeTaxonomy.Rd) or type `?chargeTaxonomy` in R for more details. 
 
 [This R script](https://github.com/AllenInstitute/CHARGE_taxonomy/blob/main/vignettes/create_taxonomies_08152025.R) generates CHARGE RData files for [all taxonomies available in AIT format as of 15 August 2025](https://github.com/AllenInstitute/AllenInstituteTaxonomy/blob/main/taxonomies.md).  Here is a [version better formatted for web viewing](https://github.com/AllenInstitute/CHARGE_taxonomy/blob/main/vignettes/create_taxonomies_08152025.md).
+
+## Reporting issues or suggestions
+
+Please share any comments, suggestions, bugs, or any other thoughts using the button in the app, or by [submitting an issue](https://github.com/AllenInstitute/CHARGE_taxonomy/issues).
+
+## License
+
+The license for this package is available on Github at: https://github.com/AllenInstitute/CHARGE_taxonomy/blob/master/LICENSE
+
+## Level of Support
+
+We only plan updates to this tool as needed to ensure compatability with the main [CHARGE repo](https://github.com/alleninstitute/CHARGE).
