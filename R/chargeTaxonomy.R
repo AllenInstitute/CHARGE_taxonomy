@@ -400,8 +400,9 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   constellation <- list()
   for (level in hierarchy){
     print(paste("... creating constellation for",level))
-    cl.cl  = metadata[keep_sample,hierarchy_old[level]]
-    names(cl.cl) = rownames(rd.dat)
+    cl.cl <- metadata[rownames(rd.dat), hierarchy_old[level]]
+    cl.cl <- as.character(cl.cl)
+    names(cl.cl) <- rownames(rd.dat)
     result = get_knn_graph(rd.dat, cl=cl.cl, k =50) 
     
     ## Select robust edges for plotting
