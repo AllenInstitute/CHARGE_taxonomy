@@ -3,8 +3,9 @@
 #' @param taxonomyDir Directory containing the AIT file -OR- a direct h5ad file name -OR- a URL of a publicly accessible AIT file.
 #' @param anndata_file If taxonomyDir is a directory, anndata_file must be the file name of the anndata object (.h5ad) to be loaded in that directory. If taxonomyDir is a file name or a URL, then anndata_file is ignored.
 #' @param log.file.path Path to write log file to. Defaults to current working directory. 
+#' @param force (unused; kept for backwards compatibility)
 #'
-#' @return Organized reference object ready for mapping against.
+#' @return Organized reference object ready for mapping against (e.g., an anndata object)
 #' 
 #' @import anndata
 #'
@@ -103,9 +104,10 @@ log2CPM_byRow <- function (counts, sf = NULL, denom = 1e+06, offset=1){
     sf <- Matrix::rowSums(counts)
   }
   sf <- sf/denom
+  sf[sf == 0] <- 1 / denom
   normalized.expr   <- counts
-  normalized.expr@x <- counts@x/sf[as.integer(counts@i + offset)]
-  normalized.expr@x <- log2(normalized.expr@x+1)
+  normalized.expr@x <- counts@x / sf[as.integer(counts@i) + 1L]
+  normalized.expr@x <- log2(normalized.expr@x + offset)
   return(normalized.expr)
 }
 
@@ -348,10 +350,6 @@ annotate_factor <- function(df,
                             na_val = "ZZ_Missing",
                             colorset = "varibow", color_order = "sort") {
   
-  # library(dplyr)
-  # library(lazyeval)
-  # library(viridisLite)
-  
   if (class(try(is.character(col), silent = T)) == "try-error") {
     col <- lazyeval::expr_text(col)
   } else if (class(col) == "NULL") {
@@ -418,6 +416,190 @@ annotate_factor <- function(df,
 }
 
 
+
+#' Generate colors and ids for numeric annotations
+#'
+#' @param df data frame to annotate
+#' @param col name of the numeric column to annotate
+#' @param base base name for the annotation, which wil be used in the desc table. If not provided, will use col as base.
+#' @param scale The scale to use for assigning colors. Options are "linear","log10","log2, and "zscore"
+#' @param na_val The value to use to replace NAs. default = 0.
+#' @param colorset A vector of colors to use for the color gradient. default = c("darkblue","white","red")
+#'
+#' @return A modified data frame: the annotated column will be renamed base_label, and base_id and base_color columns will be appended
+#'
+#' @export
+annotate_num <- function (df,
+                          col = NULL, base = NULL,
+                          scale = "log10", na_val = 0,
+                          colorset = c("darkblue", "white", "red")) {
+
+  #library(lazyeval)
+  #library(dplyr)
+
+  if(class(try(is.character(col), silent = T)) == "try-error") {
+    col <- lazyeval::expr_text(col)
+  } else if(class(col) == "NULL") {
+    stop("Specify a column (col) to annotate.")
+  }
+
+  if(class(try(is.character(base), silent = T)) == "try-error") {
+    base <- lazyeval::expr_text(base)
+  } else if(class(base) == "NULL") {
+    base <- col
+  }
+
+  if (!is.numeric(df[[col]])) {
+    df[[col]] <- as.numeric(df[[col]])
+  }
+
+  df[[col]][is.na(df[[col]])] <- na_val
+
+  x <- df[[col]]
+
+  annotations <- data.frame(label = unique(x)) %>%
+    dplyr::arrange(label) %>%
+    dplyr::mutate(id = 1:dplyr::n())
+
+  if (scale == "log10") {
+    colors <- values_to_colors(log10(annotations$label + 1), colorset = colorset)
+  } else if(scale == "log2") {
+    colors <- values_to_colors(log2(annotations$label + 1), colorset = colorset)
+  } else if(scale == "zscore") {
+    colors <- values_to_colors(scale(annotations$label), colorset = colorset)
+  } else if(scale == "linear") {
+    colors <- values_to_colors(annotations$label, colorset = colorset)
+  }
+  annotations <- mutate(annotations, color = colors)
+  names(annotations) <- paste0(base, c("_label", "_id", "_color"))
+
+  names(df)[names(df) == col] <- paste0(base,"_label")
+  df <- dplyr::left_join(df, annotations, by = paste0(base,"_label"))
+  df
+}
+
+#' Generate colors and ids for categorical annotations
+#'
+#' @param df data frame to annotate
+#' @param col name of the character column to annotate
+#' @param base base name for the annotation, which wil be used in the desc
+#'   table. If not provided, will use col as base.
+#' @param sort_label a logical value to determine if the data in col should be
+#'   arranged alphanumerically before ids are assigned. default = T.
+#' @param na_val The value to use to replace NAs. default = "ZZ_Missing".
+#' @param colorset The colorset to use for assigning category colors. Options
+#'   are "rainbow","viridis","inferno","magma", and "terrain"
+#' @param color_order The order in which colors should be assigned. Options are
+#'   "sort" and "random". "sort" assigns colors in order; "random" will randomly
+#'   assign colors.
+#'
+#' @return A modified data frame: the annotated column will be renamed
+#'   base_label, and base_id and base_color columns will be appended
+#'
+#' @export
+annotate_cat <- function(df,
+                         col = NULL, base = NULL,
+                         sort_label = T, na_val = "ZZ_Missing",
+                         colorset = "varibow", color_order = "sort") {
+
+  #library(dplyr)
+  #library(lazyeval)
+  #library(viridisLite)
+
+  if(class(try(is.character(col), silent = T)) == "try-error") {
+    col <- lazyeval::expr_text(col)
+  } else if(class(col) == "NULL") {
+    stop("Specify a column (col) to annotate.")
+  }
+
+  if(class(try(is.character(base), silent = T)) == "try-error") {
+    base <- lazyeval::expr_text(base)
+  } else if(class(base) == "NULL") {
+    base <- col
+  }
+
+  if(!is.character(df[[col]])) {
+    df[[col]] <- as.character(df[[col]])
+  }
+
+  df[[col]][is.na(df[[col]])] <- na_val
+
+  x <- df[[col]]
+
+  annotations <- data.frame(label = unique(x), stringsAsFactors = F)
+
+  if(sort_label) {
+    annotations <- annotations %>% dplyr::arrange(label)
+  }
+
+  annotations <- annotations %>%
+    dplyr::mutate(id = 1:n())
+
+  if(colorset == "varibow") {
+    colors <- varibow(nrow(annotations))
+  } else if(colorset == "rainbow") {
+    colors <- sub("FF$","",grDevices::rainbow(nrow(annotations)))
+  } else if(colorset == "viridis") {
+    colors <- sub("FF$","",viridisLite::viridis(nrow(annotations)))
+  } else if(colorset == "magma") {
+    colors <- sub("FF$","",viridisLite::magma(nrow(annotations)))
+  } else if(colorset == "inferno") {
+    colors <- sub("FF$","",viridisLite::inferno(nrow(annotations)))
+  } else if(colorset == "plasma") {
+    colors <- sub("FF$","",viridisLite::plasma(nrow(annotations)))
+  } else if(colorset == "terrain") {
+    colors <- sub("FF$","",grDevices::terrain.colors(nrow(annotations)))
+  } else if(is.character(colorset)) {
+    colors <- grDevices::colorRampPalette(colorset)(nrow(annotations))
+  }
+
+  if(color_order == "random") {
+
+    colors <- sample(colors, length(colors))
+
+  }
+
+  annotations <- dplyr::mutate(annotations, color = colors)
+
+  names(annotations) <- paste0(base, c("_label","_id","_color"))
+
+  names(df)[names(df) == col] <- paste0(base,"_label")
+
+  df <- dplyr::left_join(df, annotations, by = paste0(base, "_label"))
+
+  df
+}
+
+
+
+#' Create a generic description file
+#'
+#' @param dat any data frame that you would like to create a description file for
+#' @param name desired names of each element in the description file (default is the column names)
+#' @param use_label_columns should only columns containing "_label" be included (default = FALSE)
+#' @param start_columns character vector of variables to include first in the list 
+#'	(default = NULL, but "cluster" would be a common choice)
+#'
+#' @return a data.frame with columns "base", "name", and "type" for writing to tome
+#'
+#' @export
+create_desc <- function(dat, name = colnames(dat), use_label_columns = FALSE, start_columns = NULL) {
+  dat <- as.data.frame(dat)
+  if (use_label_columns) {
+    dat <- dat[, grepl("_label", colnames(dat))]
+    colnames(dat) <- gsub("_label", "", colnames(dat))
+  }
+
+  desc <- data.frame(base = colnames(dat), name = name, type = "cat")
+  for (i in 1:dim(dat)[2]) if (is.element(class(dat[, i]), c("numeric", "integer"))) {
+      desc[i, 3] <- "num"
+  }
+	
+  ## Reorder colums as requested
+  cn   <- c(intersect(start_columns,desc$base),setdiff(desc$base,start_columns))
+  desc <- desc[match(cn,desc$base),]
+  desc
+}
 
 
 #'Group annotation columns

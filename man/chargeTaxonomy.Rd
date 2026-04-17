@@ -13,6 +13,7 @@ chargeTaxonomy(
   embedding = NULL,
   variable.genes = NULL,
   subsample = 1e+08,
+  stats.dir = NULL,
   weight.by = "cell",
   charge.file.name = "CHARGE.RData",
   seed = 42
@@ -35,6 +36,8 @@ chargeTaxonomy(
 
 \item{subsample}{How much subsampling should be done before running statistics. Default (recommended!) is none, but subsampling can be done to speed up calculations.}
 
+\item{stats.dir}{A directory that includes precomputed statistics from chargeTaxonomyHybrid. Typically this should be left as default (NULL) with chargeTaxonomyHybrid run directly if python is to be used.}
+
 \item{weight.by}{Should statistics for higher levels of the hierarchy be weighted by "cell" (default), whereby each statistic is recalculated on all the cells in a given group for each level, or by "cluster", whereby statistics are averaged, counting each item from the first level of the hierarchy (e.g., cluster) evenly.}
 
 \item{charge.file.name}{File name (and path) to write CHARGE file to}
@@ -55,7 +58,7 @@ Write an RData object with the following variables
 \item hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
 \item cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
 \item constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
-\strong{NOTE: This function is tested on "docker://alleninst/scrattch:1.1.2". We strongly encourage using this docker environment.}
+\strong{NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.}
 }
 }
 \examples{

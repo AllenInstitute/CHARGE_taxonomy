@@ -17,9 +17,11 @@ loadTaxonomy(
 \item{anndata_file}{If taxonomyDir is a directory, anndata_file must be the file name of the anndata object (.h5ad) to be loaded in that directory. If taxonomyDir is a file name or a URL, then anndata_file is ignored.}
 
 \item{log.file.path}{Path to write log file to. Defaults to current working directory.}
+
+\item{force}{(unused; kept for backwards compatibility)}
 }
 \value{
-Organized reference object ready for mapping against.
+Organized reference object ready for mapping against (e.g., an anndata object)
 }
 \description{
 Read in a reference data set in Allen taxonomy format (note: this is a copy of the scrattch.taxonomy function of the same name)
