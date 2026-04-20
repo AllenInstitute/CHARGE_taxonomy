@@ -250,6 +250,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     print('... means')
     means   <- get_cl_means(t_norm_counts,cluster_factor)
     print('... sds')
+    
     sds     <- sqrt(get_cl_vars(t_norm_counts,cluster_factor,means))
   }
     
@@ -600,14 +601,39 @@ chargeTaxonomyHybrid <- function(AIT.file,
   # 2) Ensure output dir exists
   dir.create(stats.dir, recursive = TRUE, showWarnings = FALSE)
   
+  # 2.5) Subsample using R
+  
+  # Read the h5ad in backed mode just to get obs / hierarchy
+  library(anndata)
+  
+  ad <- anndata::read_h5ad(AIT.file, backed = "r")
+  hierarchy <- names(ad$uns$hierarchy)[order(-as.numeric(ad$uns$hierarchy))]
+  cluster_vector <- ad$obs[, hierarchy[1]]
+  
+  # IMPORTANT: use the exact R subsampling function here
+  keep_sample <- subsampleCells(cluster_vector, subsample, seed = seed)
+  
+  # Convert logical mask -> exact cell IDs
+  subsample_ids <- rownames(ad$obs)[keep_sample]
+  
+  subsample_ids_file <- file.path(stats.dir, "subsample_ids.csv")
+  dir.create(stats.dir, recursive = TRUE, showWarnings = FALSE)
+  write.csv(
+    data.frame(cell_id = subsample_ids),
+    subsample_ids_file,
+    row.names = FALSE,
+    quote = TRUE
+  )
+  
   # 3) Build command
   cmd <- sprintf(
-    "%s %s --h5ad %s --outdir %s --subsample %s --weight_by %s --seed %s",
+    "%s %s --h5ad %s --outdir %s --subsample %s --subsample_ids %s --weight_by %s --seed %s",
     shQuote(python.exe),
     shQuote(python.script),
     shQuote(AIT.file),
     shQuote(stats.dir),
     as.integer(subsample),
+    shQuote(subsample_ids_file),
     shQuote(weight.by),
     as.integer(seed)
   )
