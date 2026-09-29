@@ -1,0 +1,6 @@
+exportPattern("^[[:alpha:]]+")
+import(Matrix)
+import(dplyr)
+import(ggplot2)
+import(plotly)
+importFrom(tibble,tibble)

@@ -1,0 +1,9 @@
+{
+	"version": 1,
+	"attached_datasets": [
+		{
+			"id": "36850c3e-c90e-4921-bfe3-8e7f25c0aab6",
+			"mount": "HMBA_SpC_AiT_MMC"
+		}
+	]
+}

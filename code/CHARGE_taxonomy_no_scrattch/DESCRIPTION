@@ -1,0 +1,30 @@
+Package: CHARGE.taxonomy
+Type: Package
+Title: CHARGE Taxonomy Without Scrattch Runtime Dependencies
+Version: 0.1.0
+Authors@R: person("Jeremy", "Miller", role = c("aut", "cre"), email = "jeremy.miller@example.org")
+Description: CHARGE taxonomy generation with the required helper functions included locally, avoiding runtime dependencies on scrattch.taxonomy and scrattch.bigcat.
+License: file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports:
+    anndata,
+    BiocNeighbors,
+    cowplot,
+    data.table,
+    dplyr,
+    ggforce,
+    ggplot2,
+    ggrepel,
+    gridExtra,
+    Hmisc,
+    irlba,
+    lazyeval,
+    Matrix,
+    matrixStats,
+    plotly,
+    RANN,
+    stringr,
+    tibble,
+    umap,
+    viridisLite

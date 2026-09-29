@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "options(
+  repos = c(CRAN = 'https://packagemanager.rstudio.com/all/__linux__/jammy/latest'),
+  unzip = 'internal',
+  download.file.method = 'libcurl',
+  Ncpus = parallel::detectCores()
+)" >> /etc/R/Rprofile.site
+
+python3 -m pip install --no-cache-dir \
+  "anndata==0.11.4" \
+  "h5py==3.16.0" \
+  "numpy==1.25.1" \
+  "pandas==2.0.3" \
+  "scipy==1.11.1" \
+  "scikit-learn==1.7.2" \
+  "umap-learn==0.5.12"
+
+Rscript -e "
+Sys.setenv(TAR = '/bin/tar')
+
+install.packages(
+  c(
+    'anndata',
+    'cowplot',
+    'data.table',
+    'dplyr',
+    'ggforce',
+    'ggplot2',
+    'ggrepel',
+    'gridExtra',
+    'Hmisc',
+    'irlba',
+    'lazyeval',
+    'matrixStats',
+    'plotly',
+    'RANN',
+    'remotes',
+    'stringr',
+    'tibble',
+    'umap',
+    'viridisLite'
+  ),
+  dependencies = NA
+)
+
+if (!requireNamespace('BiocManager', quietly = TRUE)) {
+  install.packages('BiocManager')
+}
+
+BiocManager::install(
+  'BiocNeighbors',
+  ask = FALSE,
+  update = FALSE
+)
+"

@@ -1,0 +1,100 @@
+{
+	"version": 1,
+	"base_image": "codeocean/py-r:python3.10.12-R4.2.3-IRkernel-ubuntu22.04",
+	"post_install": true,
+	"options": {
+		"registry_host_arg": true,
+		"git_ask_pass": true,
+		"mount_secrets": true
+	},
+	"installers": {
+		"apt": {
+			"packages": [
+				{
+					"name": "build-essential",
+					"version": "12.9ubuntu3"
+				},
+				{
+					"name": "gfortran",
+					"version": "4:11.2.0-1ubuntu1"
+				},
+				{
+					"name": "git",
+					"version": "1:2.34.1-1ubuntu1.17"
+				},
+				{
+					"name": "libcurl4-openssl-dev",
+					"version": "7.81.0-1ubuntu1.27"
+				},
+				{
+					"name": "libglpk-dev",
+					"version": "5.0-1"
+				},
+				{
+					"name": "libgmp-dev",
+					"version": "2:6.2.1+dfsg-3ubuntu1"
+				},
+				{
+					"name": "libhdf5-dev",
+					"version": "1.10.7+repack-4ubuntu2"
+				},
+				{
+					"name": "liblapack-dev",
+					"version": "3.10.0-2ubuntu1"
+				},
+				{
+					"name": "libopenblas-dev",
+					"version": "0.3.20+ds-1"
+				},
+				{
+					"name": "libssl-dev",
+					"version": "3.0.2-0ubuntu1.29"
+				},
+				{
+					"name": "libxml2-dev",
+					"version": "2.9.13+dfsg-1ubuntu0.12"
+				},
+				{
+					"name": "zlib1g-dev",
+					"version": "1:1.2.11.dfsg-2ubuntu9.2"
+				}
+			],
+			"install_software_properties_common": true
+		},
+		"rbioconductor": {
+			"packages": [
+				{
+					"name": "beachmat"
+				}
+			],
+			"r_version": "4.2.3",
+			"install_bioconductor": true
+		},
+		"rgithub": {
+			"packages": [
+				{
+					"name": "AllenInstitute/CHARGE_taxonomy",
+					"version": "cee4e2aa0d0268ee5dad34e2bdf9855a1379a6b2"
+				},
+				{
+					"name": "AllenInstitute/scrattch.bigcat",
+					"version": "4f2818a88fdc232099d031a54bc9fb6f95951f83"
+				}
+			]
+		}
+	},
+	"env_variables": [
+		{
+			"name": "CRAN",
+			"value": "https://packagemanager.posit.co/cran/__linux__/jammy/latest"
+		},
+		{
+			"name": "LANG",
+			"value": "en_US.UTF-8"
+		},
+		{
+			"name": "TZ",
+			"value": "Etc/UTC"
+		}
+	]
+}
