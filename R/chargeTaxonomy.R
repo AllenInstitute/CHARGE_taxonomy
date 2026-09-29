@@ -549,6 +549,8 @@ chargeTaxonomyFromStats <- function(AIT.file,
 #' @param python.exe What is the name of the executable for python (Default is 'python3')
 #' 
 #' @import Matrix
+#' @import matrixStats
+#' @import anndata
 #' 
 #' @examples
 #' \dontrun{
@@ -577,7 +579,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
   # 1) Resolve python script location
   if (is.null(python.script)) {
     # First try installed package location (inst/python -> python/)
-    pkg_script <- system.file("python", "h5ad_to_charge_stats.py", package = "CHARGE_taxonomy")
+    pkg_script <- system.file("python", "h5ad_to_charge_stats.py", package = "CHARGE.taxonomy")
     
     if (!is.null(pkg_script) && nzchar(pkg_script) && file.exists(pkg_script)) {
       python.script <- pkg_script
@@ -591,7 +593,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
     stop(
       "Could not find h5ad_to_charge_stats.py.\n",
       "Looked for:\n",
-      "  1) system.file('python','h5ad_to_charge_stats.py', package='CHARGE_taxonomy')\n",
+      "  1) system.file('python','h5ad_to_charge_stats.py', package='CHARGE.taxonomy')\n",
       "  2) ", python.script, "\n\n",
       "If developing locally, place h5ad_to_charge_stats.py in your working directory.\n",
       "If using the installed package, ensure it is located at inst/python/h5ad_to_charge_stats.py before install."
@@ -605,6 +607,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
   
   # Read the h5ad in backed mode just to get obs / hierarchy
   library(anndata)
+  library(matrixStats)
   
   ad <- anndata::read_h5ad(AIT.file, backed = "r")
   hierarchy <- names(ad$uns$hierarchy)[order(-as.numeric(ad$uns$hierarchy))]

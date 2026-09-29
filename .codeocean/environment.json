@@ -24,7 +24,7 @@
 				},
 				{
 					"name": "libcurl4-openssl-dev",
-					"version": "7.81.0-1ubuntu1.27"
+					"version": "7.81.0-1ubuntu1.29"
 				},
 				{
 					"name": "libglpk-dev",
@@ -52,7 +52,7 @@
 				},
 				{
 					"name": "libxml2-dev",
-					"version": "2.9.13+dfsg-1ubuntu0.12"
+					"version": "2.9.13+dfsg-1ubuntu0.13"
 				},
 				{
 					"name": "zlib1g-dev",
@@ -60,27 +60,6 @@
 				}
 			],
 			"install_software_properties_common": true
-		},
-		"rbioconductor": {
-			"packages": [
-				{
-					"name": "beachmat"
-				}
-			],
-			"r_version": "4.2.3",
-			"install_bioconductor": true
-		},
-		"rgithub": {
-			"packages": [
-				{
-					"name": "AllenInstitute/CHARGE_taxonomy",
-					"version": "cee4e2aa0d0268ee5dad34e2bdf9855a1379a6b2"
-				},
-				{
-					"name": "AllenInstitute/scrattch.bigcat",
-					"version": "4f2818a88fdc232099d031a54bc9fb6f95951f83"
-				}
-			]
 		}
 	},
 	"env_variables": [

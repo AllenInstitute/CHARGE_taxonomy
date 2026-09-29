@@ -54,4 +54,22 @@ BiocManager::install(
   ask = FALSE,
   update = FALSE
 )
+
+BiocManager::install(
+'beachmat',
+ask = FALSE,
+update = FALSE
+)
+
+remotes::install_github(
+'AllenInstitute/scrattch.bigcat',
+upgrade = 'never',
+dependencies = TRUE
+)
+
+remotes::install_github(
+'AllenInstitute/CHARGE_taxonomy',
+upgrade = 'never',
+dependencies = TRUE
+)
 "

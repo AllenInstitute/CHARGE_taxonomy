@@ -1,4 +1,4 @@
-# hash:sha256:3ac3035bad23db1961aee089d87af2046c60df2ddf725c3bffadb5cc1c7f120a
+# hash:sha256:65c7a47e2754c6bb848be7311b62c806b2eca4c539aaebf085f741064b52e75e
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/py-r:python3.10.12-R4.2.3-IRkernel-ubuntu22.04
 
@@ -15,30 +15,16 @@ RUN apt-get update \
         build-essential=12.9ubuntu3 \
         gfortran=4:11.2.0-1ubuntu1 \
         git=1:2.34.1-1ubuntu1.17 \
-        libcurl4-openssl-dev=7.81.0-1ubuntu1.27 \
+        libcurl4-openssl-dev=7.81.0-1ubuntu1.29 \
         libglpk-dev=5.0-1 \
         libgmp-dev=2:6.2.1+dfsg-3ubuntu1 \
         libhdf5-dev=1.10.7+repack-4ubuntu2 \
         liblapack-dev=3.10.0-2ubuntu1 \
         libopenblas-dev=0.3.20+ds-1 \
         libssl-dev=3.0.2-0ubuntu1.29 \
-        libxml2-dev=2.9.13+dfsg-1ubuntu0.12 \
+        libxml2-dev=2.9.13+dfsg-1ubuntu0.13 \
         zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 \
     && rm -rf /var/lib/apt/lists/*
-
-RUN --mount=type=secret,id=git-access-token \
-    GITHUB_PAT="$(cat /run/secrets/git-access-token)" \
-    Rscript -e 'remotes::install_github( \
-        "AllenInstitute/CHARGE_taxonomy", \
-        ref = "cee4e2aa0d0268ee5dad34e2bdf9855a1379a6b2")' \
-    && Rscript -e 'remotes::install_github( \
-        "AllenInstitute/scrattch.bigcat", \
-        ref = "4f2818a88fdc232099d031a54bc9fb6f95951f83")'
-
-RUN Rscript -e 'options(warn=2); install.packages("BiocManager")'
-RUN Rscript -e 'options(warn=2); BiocManager::install(c( \
-        "beachmat" \
-    ))' # Original versions: latest
 
 COPY postInstall /
 RUN --mount=type=secret,id=secrets . /run/secrets/secrets \
