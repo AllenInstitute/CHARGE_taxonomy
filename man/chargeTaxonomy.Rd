@@ -58,8 +58,9 @@ Write an RData object with the following variables
 \item hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
 \item cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
 \item constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
-\strong{NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.}
 }
+
+\strong{NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.}
 }
 \examples{
 \dontrun{

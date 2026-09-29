@@ -6,11 +6,6 @@
 \usage{
 avgangle(x, y)
 }
-\arguments{
-\item{x}{}
-
-\item{y}{}
-}
 \value{
 av angle
 }

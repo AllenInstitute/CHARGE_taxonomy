@@ -6,17 +6,6 @@
 \usage{
 perp(x, y, len, a, mid)
 }
-\arguments{
-\item{x}{}
-
-\item{y}{}
-
-\item{len}{}
-
-\item{a}{}
-
-\item{mid}{}
-}
 \value{
 perp value
 }

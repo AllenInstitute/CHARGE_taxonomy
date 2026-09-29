@@ -47,6 +47,7 @@
 #'  - hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
 #'  - cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
 #'  - constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
+#'  
 #'  **NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.**
 #'
 #' @param AIT.anndata A reference taxonomy anndata object.  If provided, must contain counts in X or raw$X, uns$hierarchy, and obs (with columns for the hierarchy), and can optionally contain both X and raw$X and default embeddings and variable genes.  See https://github.com/AllenInstitute/AllenInstituteTaxonomy for details on expected formatting. If provided, this variable takes priority over the variables for ingesting these items separately.

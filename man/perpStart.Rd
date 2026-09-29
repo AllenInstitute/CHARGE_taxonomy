@@ -6,13 +6,6 @@
 \usage{
 perpStart(x, y, len)
 }
-\arguments{
-\item{x}{}
-
-\item{y}{}
-
-\item{len}{}
-}
 \value{
 perp start value
 }

@@ -6,15 +6,6 @@
 \usage{
 edgeMaker(whichRow, len = 100, line.segments, curved = FALSE)
 }
-\arguments{
-\item{whichRow}{}
-
-\item{len}{}
-
-\item{line.segments}{}
-
-\item{curved}{}
-}
 \value{
 edge list
 }

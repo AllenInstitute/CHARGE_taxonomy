@@ -577,7 +577,8 @@ chargeTaxonomyHybrid <- function(AIT.file,
   # 1) Resolve python script location
   if (is.null(python.script)) {
     # First try installed package location (inst/python -> python/)
-    pkg_script <- system.file("python", "h5ad_to_charge_stats.py", package = "CHARGE.taxonomy")
+    pkg_script <- system.file("python", "h5ad_to_charge_stats.py", package = "CHARGE.taxonomy") # In case function gets renamed
+    if(!nzchar(pkg_script)) pkg_script <- system.file("python", "h5ad_to_charge_stats.py", package = "CHARGE_taxonomy")
     
     if (!is.null(pkg_script) && nzchar(pkg_script) && file.exists(pkg_script)) {
       python.script <- pkg_script

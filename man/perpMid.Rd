@@ -6,13 +6,6 @@
 \usage{
 perpMid(x, y, len)
 }
-\arguments{
-\item{x}{}
-
-\item{y}{}
-
-\item{len}{}
-}
 \value{
 angle at midpoint
 }

@@ -6,13 +6,6 @@
 \usage{
 perpEnd(x, y, len)
 }
-\arguments{
-\item{x}{}
-
-\item{y}{}
-
-\item{len}{}
-}
 \value{
 perp at end
 }
