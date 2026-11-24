@@ -2,8 +2,16 @@
 	"version": 1,
 	"attached_datasets": [
 		{
+			"id": "10b85bc5-d869-4e5a-8467-a9629a29cb91",
+			"mount": "cluster_to_region_map"
+		},
+		{
 			"id": "36850c3e-c90e-4921-bfe3-8e7f25c0aab6",
 			"mount": "HMBA_SpC_AiT_MMC"
+		},
+		{
+			"id": "db9f5940-3795-4d30-931b-806a9340b055",
+			"mount": "wb_subsample"
 		}
 	]
 }

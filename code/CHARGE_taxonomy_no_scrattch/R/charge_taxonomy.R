@@ -1,3 +1,6 @@
+library(dplyr)
+library(matrixStats)
+
 # Helper function for reading stats matrix
 # 
 .read_stats_matrix <- function(path) {
@@ -61,6 +64,7 @@
 #' @param stats.dir A directory that includes precomputed statistics from chargeTaxonomyHybrid. Typically this should be left as default (NULL) with chargeTaxonomyHybrid run directly if python is to be used.
 #' @param weight.by Should statistics for higher levels of the hierarchy be weighted by "cell" (default), whereby each statistic is recalculated on all the cells in a given group for each level, or by "cluster", whereby statistics are averaged, counting each item from the first level of the hierarchy (e.g., cluster) evenly.
 #' @param charge.file.name File name (and path) to write CHARGE file to
+#' @param target.aspect A clunky way to fix the UMAP if it's vertically skewed. Keep as default (NA) typically, but if needed set as 1.25.
 #' @param seed The seed to use for reproducibility
 #' 
 #' @import Matrix
@@ -81,9 +85,10 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
                            embedding   = NULL,      # OPTIONAL; ignored if AIT.anndata is provided
                            variable.genes   = NULL, # OPTIONAL; ignored if AIT.anndata is provided
                            subsample   = 100000000,
-						   stats.dir = NULL,
+                           stats.dir = NULL,
                            weight.by   = "cell",
                            charge.file.name = "CHARGE.RData",
+                           target.aspect = NA,      # Set to 1.25 if constellation looks wonky
                            seed = 42)
 {
   #############################################################
@@ -253,7 +258,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     
     sds     <- sqrt(get_cl_vars(t_norm_counts,cluster_factor,means))
   }
-    
+  
   #############################################################
   print("===== Calculate distances and embeddings =====")
   
@@ -278,7 +283,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   variable.genes <- intersect(variable.genes,all.genes)
   if(length(variable.genes)<50) error("<50 valid variable.genes, potentially due to misalignment between count matrix column names and variable.genes input. chargeTaxonomy cannot run with so few valid genes.")
   
- ##########################
+  ##########################
   ## principal components
   print('... calculate principal components.')
   if(!is.null(stats.dir) && file.exists(file.path(stats.dir, 'rd_dat.csv'))){
@@ -420,6 +425,26 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     cl.center.df$x <- cl.center.df$x + runif(length(cl.center.df$x), -0.000001, 0.000001)  # Small jitter
     cl.center.df$y <- cl.center.df$y + runif(length(cl.center.df$y), -0.000001, 0.000001)  # Small jitter
     
+    # Optionally expand unusually narrow constellation layouts horizontally 
+    # while preserving the coordinate system used to calculate edge polygons.
+    if(!is.na(target.aspect)){
+      x.range <- diff(range(cl.center.df$x, na.rm = TRUE))
+      y.range <- diff(range(cl.center.df$y, na.rm = TRUE))
+      
+      if (is.finite(x.range) &&
+          is.finite(y.range) &&
+          x.range > 0 &&
+          y.range > 0 &&
+          x.range / y.range < target.aspect) {
+        
+        x.mid <- mean(range(cl.center.df$x, na.rm = TRUE))
+        x.scale <- target.aspect * y.range / x.range
+        
+        cl.center.df$x <- x.mid +
+          (cl.center.df$x - x.mid) * x.scale
+      }
+    }  
+    
     ## Define cl.df
     types <- rownames(cl.center.df)
     cl.df <- cluster_info[,paste0(level,c("_id","_label","_color"))]
@@ -510,6 +535,7 @@ chargeTaxonomyFromStats <- function(AIT.file,
                                     charge.file.name = 'CHARGE.RData',
                                     subsample = 100000000,
                                     weight.by = 'cell',
+                                    target.aspect=NA,
                                     seed = 42) {
   library(anndata)
   ad <- anndata::read_h5ad(AIT.file, backed = 'r')
@@ -519,6 +545,7 @@ chargeTaxonomyFromStats <- function(AIT.file,
     subsample = subsample,
     weight.by = weight.by,
     charge.file.name = charge.file.name,
+    target.aspect = target.aspect,
     seed = seed
   ))
 }
@@ -545,6 +572,7 @@ chargeTaxonomyFromStats <- function(AIT.file,
 #' @param charge.file.name File name (and path) to write CHARGE file to
 #' @param subsample How much subsampling should be done before running statistics. Default (recommended!) is none, but subsampling can be done to speed up calculations.
 #' @param weight.by Should statistics for higher levels of the hierarchy be weighted by "cell" (default), whereby each statistic is recalculated on all the cells in a given group for each level, or by "cluster", whereby statistics are averaged, counting each item from the first level of the hierarchy (e.g., cluster) evenly.
+#' @param target.aspect A clunky way to fix the UMAP if it's vertically skewed. Keep as default (NA) typically, but if needed set as 1.25.
 #' @param seed The seed to use for reproducibility
 #' @param python.exe What is the name of the executable for python (Default is 'python3')
 #' 
@@ -571,6 +599,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
                                  charge.file.name = 'CHARGE.RData',
                                  subsample = 100000000,
                                  weight.by = 'cell',
+                                 target.aspect = NA,      # Set to 1.25 if constellation looks wonky
                                  seed = 42,
                                  python.exe = 'python3') {
   
@@ -652,6 +681,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
     charge.file.name = charge.file.name,
     subsample = subsample,
     weight.by = weight.by,
+    target.aspect = target.aspect,
     seed = seed
   ))
 }
@@ -1221,7 +1251,12 @@ plot_constellation <- function (knn.cl.df,
   
   # --- FIX 5: Conditional ggplotly conversion and text addition ---
   if (enable_plotly) {
-    plotly_plot <- ggplotly(plot.all, tooltip = "text") # Use "text" for custom tooltips
+    #plotly_plot <- ggplotly(plot.all, tooltip = "text")
+    message("Converting plot.all to a ggplot grob")
+    test_grob <- ggplot2::ggplotGrob(plot.all)
+    
+    message("Converting plot.all to Plotly")
+    plotly_plot <- plotly::ggplotly(plot.all, tooltip = "text")  # Use "text" for custom tooltips
     
     # Add static text labels to plotly plot if requested
     if (plotly_labels_on_plot) {
@@ -1253,6 +1288,16 @@ plot_constellation <- function (knn.cl.df,
     final_plot_output <- plotly_plot
   } else {
     final_plot_output <- plot.all # Return standard ggplot object
+  }
+  
+  # Plotly output does not use the static grid/cowplot legends below.
+  # Return before constructing them to avoid the gtable grob error.
+  if (enable_plotly) {
+    if (return.list == TRUE) {
+      return(list(constellation = final_plot_output, edges.df = poly.Edges,
+                  nodes.df = nodes))
+    }
+    return(final_plot_output)
   }
   
   #############################
@@ -1404,22 +1449,22 @@ edgeMaker <- function(whichRow, len=100, line.segments, curved=FALSE){
   distance1 <- sum((graphCenter - bezierMid)^2)
   if(distance1 < sum((graphCenter - c(toC[1], fromC[2]))^2)){
     bezierMid <- c(toC[1], fromC[2])
-    }  # To select the best Bezier midpoint
+  }  # To select the best Bezier midpoint
   bezierMid <- (fromC + toC + bezierMid) / 3  # Moderate the Bezier midpoint
   if(curved == FALSE){bezierMid <- (fromC + toC) / 2}  # Remove the curve
-
+  
   edge <- data.frame(bezier(c(fromC[1], bezierMid[1], toC[1]),  # Generate
                             c(fromC[2], bezierMid[2], toC[2]),  # X & y
                             evaluation = len))  # Bezier path coordinates
   
   #line.width.from in 100 steps to linewidth.to
- edge$fraction <- seq(line.segments$ex.line.from[whichRow], line.segments$ex.line.to[whichRow], length.out = len)
-
+  edge$fraction <- seq(line.segments$ex.line.from[whichRow], line.segments$ex.line.to[whichRow], length.out = len)
   
-    #edge$Sequence <- 1:len  # For size and colour weighting in plot
+  
+  #edge$Sequence <- 1:len  # For size and colour weighting in plot
   edge$Group <- paste(line.segments[whichRow, 1:2], collapse = ">")
   return(edge)
-  }
+}
 
 
 
@@ -1435,8 +1480,8 @@ edgeMaker <- function(whichRow, len=100, line.segments, curved=FALSE){
 #' @return perp start value
 #' @export
 perpStart <- function(x, y, len) {
-    perp(x, y, len, angle(x, y), 1)
-        }
+  perp(x, y, len, angle(x, y), 1)
+}
 
 #' avangle
 #' 
@@ -1448,9 +1493,9 @@ perpStart <- function(x, y, len) {
 #' @return av angle
 #' @export
 avgangle <- function(x, y) {
-    a1 <- angle(x[1:2], y[1:2])
-    a2 <- angle(x[2:3], y[2:3])
-    atan2(sin(a1) + sin(a2), cos(a1) + cos(a2))
+  a1 <- angle(x[1:2], y[1:2])
+  a2 <- angle(x[2:3], y[2:3])
+  atan2(sin(a1) + sin(a2), cos(a1) + cos(a2))
 }
 
 #' perp
@@ -1466,11 +1511,11 @@ avgangle <- function(x, y) {
 #' @return perp value
 #' @export
 perp <- function(x, y, len, a, mid) {
-    dx <- len*cos(a + pi/2)
-    dy <- len*sin(a + pi/2)
-    upper <- c(x[mid] + dx, y[mid] + dy)
-    lower <- c(x[mid] - dx, y[mid] - dy)
-    rbind(upper, lower)    
+  dx <- len*cos(a + pi/2)
+  dy <- len*sin(a + pi/2)
+  upper <- c(x[mid] + dx, y[mid] + dy)
+  lower <- c(x[mid] - dx, y[mid] - dy)
+  rbind(upper, lower)    
 }
 
 #' perpMid
@@ -1484,8 +1529,8 @@ perp <- function(x, y, len, a, mid) {
 #' @return angle at midpoint
 #' @export
 perpMid <- function(x, y, len) {
-    ## Now determine angle at midpoint
-    perp(x, y, len, avgangle(x, y), 2)
+  ## Now determine angle at midpoint
+  perp(x, y, len, avgangle(x, y), 2)
 }
 
 #' perpEnd
@@ -1499,7 +1544,7 @@ perpMid <- function(x, y, len) {
 #' @return perp at end
 #' @export
 perpEnd <- function(x, y, len) {
-    perp(x, y, len, angle(x, y), 2)
+  perp(x, y, len, angle(x, y), 2)
 }
 
 
@@ -1513,7 +1558,7 @@ perpEnd <- function(x, y, len) {
 #' @return atan2 angle
 #' @export
 angle <- function(x, y) {
-    atan2(y[2] - y[1], x[2] - x[1])
+  atan2(y[2] - y[1], x[2] - x[1])
 }
 
 
@@ -1603,12 +1648,12 @@ loadTaxonomy = function(taxonomyDir = getwd(),
     normalized.expr = log2CPM_byRow(AIT.anndata$raw$X)
     AIT.anndata$X   = normalized.expr 
   }
-
+  
   ## Set scrattch.mapping to default standard mapping mode
   AIT.anndata$uns$mode = "standard"
   AIT.anndata$uns$taxonomyDir = taxonomyDir
   AIT.anndata$uns$title <- gsub(".h5ad","",anndata_file)
-
+  
   ## Return
   return(AIT.anndata)
 }
@@ -1967,34 +2012,34 @@ annotate_num <- function (df,
                           col = NULL, base = NULL,
                           scale = "log10", na_val = 0,
                           colorset = c("darkblue", "white", "red")) {
-
+  
   #library(lazyeval)
   #library(dplyr)
-
+  
   if(class(try(is.character(col), silent = T)) == "try-error") {
     col <- lazyeval::expr_text(col)
   } else if(class(col) == "NULL") {
     stop("Specify a column (col) to annotate.")
   }
-
+  
   if(class(try(is.character(base), silent = T)) == "try-error") {
     base <- lazyeval::expr_text(base)
   } else if(class(base) == "NULL") {
     base <- col
   }
-
+  
   if (!is.numeric(df[[col]])) {
     df[[col]] <- as.numeric(df[[col]])
   }
-
+  
   df[[col]][is.na(df[[col]])] <- na_val
-
+  
   x <- df[[col]]
-
+  
   annotations <- data.frame(label = unique(x)) %>%
     dplyr::arrange(label) %>%
     dplyr::mutate(id = 1:dplyr::n())
-
+  
   if (scale == "log10") {
     colors <- values_to_colors(log10(annotations$label + 1), colorset = colorset)
   } else if(scale == "log2") {
@@ -2006,7 +2051,7 @@ annotate_num <- function (df,
   }
   annotations <- mutate(annotations, color = colors)
   names(annotations) <- paste0(base, c("_label", "_id", "_color"))
-
+  
   names(df)[names(df) == col] <- paste0(base,"_label")
   df <- dplyr::left_join(df, annotations, by = paste0(base,"_label"))
   df
@@ -2035,40 +2080,40 @@ annotate_cat <- function(df,
                          col = NULL, base = NULL,
                          sort_label = T, na_val = "ZZ_Missing",
                          colorset = "varibow", color_order = "sort") {
-
+  
   #library(dplyr)
   #library(lazyeval)
   #library(viridisLite)
-
+  
   if(class(try(is.character(col), silent = T)) == "try-error") {
     col <- lazyeval::expr_text(col)
   } else if(class(col) == "NULL") {
     stop("Specify a column (col) to annotate.")
   }
-
+  
   if(class(try(is.character(base), silent = T)) == "try-error") {
     base <- lazyeval::expr_text(base)
   } else if(class(base) == "NULL") {
     base <- col
   }
-
+  
   if(!is.character(df[[col]])) {
     df[[col]] <- as.character(df[[col]])
   }
-
+  
   df[[col]][is.na(df[[col]])] <- na_val
-
+  
   x <- df[[col]]
-
+  
   annotations <- data.frame(label = unique(x), stringsAsFactors = F)
-
+  
   if(sort_label) {
     annotations <- annotations %>% dplyr::arrange(label)
   }
-
+  
   annotations <- annotations %>%
     dplyr::mutate(id = 1:n())
-
+  
   if(colorset == "varibow") {
     colors <- varibow(nrow(annotations))
   } else if(colorset == "rainbow") {
@@ -2086,21 +2131,21 @@ annotate_cat <- function(df,
   } else if(is.character(colorset)) {
     colors <- grDevices::colorRampPalette(colorset)(nrow(annotations))
   }
-
+  
   if(color_order == "random") {
-
+    
     colors <- sample(colors, length(colors))
-
+    
   }
-
+  
   annotations <- dplyr::mutate(annotations, color = colors)
-
+  
   names(annotations) <- paste0(base, c("_label","_id","_color"))
-
+  
   names(df)[names(df) == col] <- paste0(base,"_label")
-
+  
   df <- dplyr::left_join(df, annotations, by = paste0(base, "_label"))
-
+  
   df
 }
 
@@ -2123,12 +2168,12 @@ create_desc <- function(dat, name = colnames(dat), use_label_columns = FALSE, st
     dat <- dat[, grepl("_label", colnames(dat))]
     colnames(dat) <- gsub("_label", "", colnames(dat))
   }
-
+  
   desc <- data.frame(base = colnames(dat), name = name, type = "cat")
   for (i in 1:dim(dat)[2]) if (is.element(class(dat[, i]), c("numeric", "integer"))) {
-      desc[i, 3] <- "num"
+    desc[i, 3] <- "num"
   }
-	
+  
   ## Reorder colums as requested
   cn   <- c(intersect(start_columns,desc$base),setdiff(desc$base,start_columns))
   desc <- desc[match(cn,desc$base),]
@@ -2504,14 +2549,14 @@ get_knn_batch <- function(dat, ref.dat, k, method = "cor", dim = NULL, batch.siz
   }
   if (transposed) {
     results <- batch_process(seq_len(ncol(dat)), batch.size, mc.cores = mc.cores, .combine = fun,
-      FUN = function(bin) get_knn(dat[row.names(ref.dat), bin, drop = FALSE], ref.dat, k,
-        method = method, dim = dim, return.distance = return.distance,
-        transposed = TRUE, index = index, ntrees = ntrees))
+                             FUN = function(bin) get_knn(dat[row.names(ref.dat), bin, drop = FALSE], ref.dat, k,
+                                                         method = method, dim = dim, return.distance = return.distance,
+                                                         transposed = TRUE, index = index, ntrees = ntrees))
   } else {
     results <- batch_process(seq_len(nrow(dat)), batch.size, mc.cores = mc.cores, .combine = fun,
-      FUN = function(bin) get_knn(dat[bin, colnames(ref.dat), drop = FALSE], ref.dat, k,
-        method = method, dim = dim, return.distance = return.distance,
-        transposed = FALSE, index = index, ntrees = ntrees))
+                             FUN = function(bin) get_knn(dat[bin, colnames(ref.dat), drop = FALSE], ref.dat, k,
+                                                         method = method, dim = dim, return.distance = return.distance,
+                                                         transposed = FALSE, index = index, ntrees = ntrees))
   }
   if (!return.distance) results <- list(knn.index = results)
   results$index <- index
@@ -2569,4 +2614,3 @@ rd_PCA <- function(norm.dat, select.genes = row.names(norm.dat), select.cells = 
   }
   list(rd.dat = rd.dat, pca = pca)
 }
-

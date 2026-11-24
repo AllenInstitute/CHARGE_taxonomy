@@ -1,4 +1,4 @@
-# hash:sha256:65c7a47e2754c6bb848be7311b62c806b2eca4c539aaebf085f741064b52e75e
+# hash:sha256:8ac10ac7874f27661944a8b3289d7b4f4a60808310549e508aaf623be2a9950e
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/py-r:python3.10.12-R4.2.3-IRkernel-ubuntu22.04
 
@@ -21,10 +21,23 @@ RUN apt-get update \
         libhdf5-dev=1.10.7+repack-4ubuntu2 \
         liblapack-dev=3.10.0-2ubuntu1 \
         libopenblas-dev=0.3.20+ds-1 \
-        libssl-dev=3.0.2-0ubuntu1.29 \
+        libssl-dev=3.0.2-0ubuntu1.30 \
         libxml2-dev=2.9.13+dfsg-1ubuntu0.13 \
         zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 \
     && rm -rf /var/lib/apt/lists/*
+
+ADD "https://github.com/coder/code-server/releases/download/v4.100.3/code-server-4.100.3-linux-amd64.tar.gz" /.code-server/code-server.tar.gz
+
+RUN cd /.code-server \
+    && tar -xvf code-server.tar.gz \
+    && rm code-server.tar.gz \
+    && ln -s /.code-server/code-server-4.100.3-linux-amd64/bin/code-server /usr/bin/code-server \
+    && mkdir -p /.vscode/extensions
+
+RUN code-server --extensions-dir="/.vscode/extensions" --install-extension ms-python.python@2025.14.0 \
+    && code-server --extensions-dir="/.vscode/extensions" --install-extension ms-toolsai.jupyter@2025.4.1 \
+    && code-server --extensions-dir="/.vscode/extensions" --install-extension reditorsupport.r@2.8.6 \
+    && code-server --extensions-dir="/.vscode/extensions" --install-extension saoudrizwan.claude-dev@3.35.1
 
 COPY postInstall /
 RUN --mount=type=secret,id=secrets . /run/secrets/secrets \
