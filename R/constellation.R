@@ -126,11 +126,17 @@ plot_constellation <- function (knn.cl.df,
   g <- ggplot_build(p.nodes)
   dots <-g[["data"]][[1]] #dataframe with geom_point size, color, coords
   
-  nodes <- left_join(cl.center.df, dots, by=c("x","y")) %>% ungroup()
+  # The point layer has one row per input node. Joining on coordinates would
+  # duplicate nodes when two types have exactly the same centroid.
+  stopifnot(nrow(dots) == nrow(cl.center.df),
+            isTRUE(all.equal(dots$x, cl.center.df$x, check.attributes = FALSE)),
+            isTRUE(all.equal(dots$y, cl.center.df$y, check.attributes = FALSE)))
+  nodes <- cl.center.df
+  nodes$size <- dots$size
   
   ###==== if node.dodge==TRUE new xy coords are calculated for overlapping nodes.
   
-  if (node.dodge==TRUE){
+  if (node.dodge == TRUE && nrow(nodes) > 1L){
     # ... (node dodging logic - unchanged, assuming it works) ...
     # This section contains nested loops for node dodging. It's computationally
     # intensive and might be a bottleneck for large datasets.
@@ -218,207 +224,62 @@ plot_constellation <- function (knn.cl.df,
   }
   
   
-  ###==== prepare data for plotting of edges between nodes
-  
-  ##filter out all edges that are <5% of total for that cluster
-  #knn.cl <- knn.cl.df[knn.cl.df$frac >0.05,] #1337 lines
-  knn.cl <- knn.cl.df
-  ##from knn.cl data frame remove all entries within cluster edges.
-  knn.cl.d <- knn.cl[!(knn.cl$cl.from == knn.cl$cl.to),]
-  nodes$cl=as.character(nodes$cl)
-  knn.cl.d$cl.from <- as.character(knn.cl.d$cl.from)
-  knn.cl.d$cl.to <- as.character(knn.cl.d$cl.to)
-  
-  knn.cl.d <- left_join(knn.cl.d, select(nodes, cl, node.width), by=c("cl.from"="cl"))
-  colnames(knn.cl.d)[colnames(knn.cl.d)=="node.width"]<- "node.pt.from"
-  knn.cl.d$node.pt.to <- ""
-  knn.cl.d$Freq.to <- ""
-  knn.cl.d$frac.to <- ""
-  
-  
-  #bidirectional
-  knn.cl.bid <- NULL
-  for (i in 1:nrow(knn.cl.d)) {
-    
-    line <- subset(knn.cl.d[i,])
-    r <- subset(knn.cl.d[i:nrow(knn.cl.d),])
-    r <- r[(line$cl.from == r$cl.to & line$cl.to == r$cl.from ),]
-    
-    if (dim(r)[1] != 0) {
-      line$Freq.to <- r$Freq
-      line$node.pt.to <- r$node.pt.from
-      line$frac.to <- r$frac
-      knn.cl.bid <- rbind(knn.cl.bid, line)
-    }
-    #print(i)
-  }
-  
-  #unidirectional
-  knn.cl.uni <- NULL
-  for (i in 1:nrow(knn.cl.d)) {
-    
-    line <- subset(knn.cl.d[i,])
-    r <- knn.cl.d[(line$cl.from == knn.cl.d$cl.to & line$cl.to == knn.cl.d$cl.from ),]
-    
-    if (dim(r)[1] == 0) {
-      knn.cl.uni <- rbind(knn.cl.uni, line)
-    }
-    #print(i)
-  }
-  
-  
-  #min frac value = 0.01
-  knn.cl.uni$node.pt.to <- nodes$node.width[match(knn.cl.uni$cl.to, nodes$cl)]
-  knn.cl.uni$Freq.to <- 1
-  knn.cl.uni$frac.to <- 0.01
-  knn.cl.lines <- rbind(knn.cl.bid, knn.cl.uni)
-  
-  
-  ###==== create line segments
-  
-  line.segments <- knn.cl.lines %>% select(cl.from, cl.to)
+  ###==== Prepare the retained between-type edges (zero is valid).
   nodes$cl <- as.character(nodes$cl)
-  line.segments <- left_join(line.segments,select(nodes, x, y, cl), by=c("cl.from"="cl"))
-  line.segments <- left_join(line.segments,select(nodes, x, y, cl), by=c("cl.to"="cl"))
-  colnames(line.segments) <- c("cl.from", "cl.to", "x.from", "y.from", "x.to", "y.to")
-  
-  line.segments <- data.frame(line.segments,
-                              freq.from = knn.cl.lines$Freq,
-                              freq.to = knn.cl.lines$Freq.to,
-                              frac.from = knn.cl.lines$frac,
-                              frac.to =  knn.cl.lines$frac.to,
-                              node.pt.from =  knn.cl.lines$node.pt.from,
-                              node.pt.to = knn.cl.lines$node.pt.to)
-  
-  
-  ##from points to native coords
-  line.segments$node.size.from <- line.segments$node.pt.from/10
-  line.segments$node.size.to <- line.segments$node.pt.to/10
-  
-  
-  line.segments$line.width.from <- line.segments$node.size.from*line.segments$frac.from
-  line.segments$line.width.to <- line.segments$node.size.to*line.segments$frac.to
-  
-  ##max fraction to max point size
-  line.segments$line.width.from<- (line.segments$frac.from/max(line.segments$frac.from, line.segments$frac.to))*line.segments$node.size.from
-  
-  line.segments$line.width.to<- (line.segments$frac.to/max(line.segments$frac.from, line.segments$frac.to))*line.segments$node.size.to
-  
-  
-  ###=== create edges, exaggerated width
-  
-  line.segments$ex.line.from <-line.segments$line.width.from #true to frac
-  line.segments$ex.line.to <-line.segments$line.width.to #true to frac
-  
-  line.segments$ex.line.from <- pmin((line.segments$line.width.from*exxageration),line.segments$node.size.from) #exxagerated width
-  line.segments$ex.line.to <- pmin((line.segments$line.width.to*exxageration),line.segments$node.size.to) #exxagerated width
-  
-  
-  line.segments <- na.omit(line.segments)
-  
-  print("calculating edges")
-  
-  # Assuming edgeMaker, perpStart, perpMid, perpEnd are defined elsewhere in your environment
-  # They are not in the provided function, but necessary for allEdges and poly.Edges
-  # For this example, I'll assume they work correctly and 'allEdges' and 'poly.Edges' are formed.
-  # Placeholder for edgeMaker if it's not defined
-  if (!exists("edgeMaker")) {
-    edgeMaker <- function(i, len, curved, line.segments) {
-      # This is a placeholder; replace with your actual edgeMaker function
-      # It should return a data frame with x, y, fraction, and Group
-      data.frame(x = runif(len), y = runif(len), fraction = runif(len),
-                 Group = paste(line.segments$cl.from[i], line.segments$cl.to[i], sep = ">"))
-    }
+  if (anyNA(nodes$cl) || anyDuplicated(nodes$cl)) stop('Node IDs must be unique.')
+  from <- match(as.character(knn.cl.df$cl.from), nodes$cl)
+  to <- match(as.character(knn.cl.df$cl.to), nodes$cl)
+  frac <- knn.cl.df$frac
+  keep <- !is.na(from) & !is.na(to) & from != to & is.finite(frac) & frac > 0
+  from <- from[keep]; to <- to[keep]; frac <- frac[keep]
+  key <- paste(from, to, sep = ':')
+  rev.idx <- match(paste(to, from, sep = ':'), key)
+  # Keep one ribbon for a reciprocal pair, with its two directional widths.
+  take <- which(is.na(rev.idx) | seq_along(rev.idx) < rev.idx)
+  f <- from[take]; t <- to[take]
+  frac.to <- frac[rev.idx[take]]
+  frac.to[is.na(frac.to)] <- 0.01  # original narrow taper for one-way edges
+  line.segments <- data.frame(
+    cl.from = nodes$cl[f], cl.to = nodes$cl[t],
+    x.from = nodes$x[f], y.from = nodes$y[f], x.to = nodes$x[t], y.to = nodes$y[t],
+    frac.from = frac[take], frac.to = frac.to,
+    node.size.from = nodes$node.width[f] / 10,
+    node.size.to = nodes$node.width[t] / 10
+  )
+  # A ribbon between coincident centroids has no visible path.
+  line.segments <- line.segments[with(line.segments, x.from != x.to | y.from != y.to), , drop = FALSE]
+  poly.Edges <- data.frame(x = numeric(), y = numeric(), Group = character(),
+                           g1 = character(), g2 = character())
+  if (nrow(line.segments) > 0L) {
+    max.frac <- max(line.segments$frac.from, line.segments$frac.to)
+    line.segments$ex.line.from <- with(line.segments,
+      pmin(frac.from / max.frac * node.size.from * exxageration, node.size.from))
+    line.segments$ex.line.to <- with(line.segments,
+      pmin(frac.to / max.frac * node.size.to * exxageration, node.size.to))
+    polygons <- lapply(seq_len(nrow(line.segments)), function(i) {
+      path <- edgeMaker(i, len = 50L, curved = curved, line.segments = line.segments)
+      n <- nrow(path)
+      xy <- vapply(seq_len(n), function(j) {
+        ij <- seq.int(max(1L, j - 1L), min(n, j + 1L))
+        half.width <- path$fraction[j] / 2
+        if (j == 1L) p <- perpStart(path$x[ij], path$y[ij], half.width)
+        else if (j == n) p <- perpEnd(path$x[ij], path$y[ij], half.width)
+        else p <- perpMid(path$x[ij], path$y[ij], half.width)
+        c(p[1L, ], p[2L, ])
+      }, numeric(4L))
+      data.frame(x = c(xy[1L, ], rev(xy[3L, ])),
+                 y = c(xy[2L, ], rev(xy[4L, ])), Group = as.character(i),
+                 g1 = line.segments$cl.from[i], g2 = line.segments$cl.to[i])
+    })
+    poly.Edges <- do.call(rbind, polygons)
   }
-  if (!exists("perpStart")) {
-    perpStart <- function(x_coords, y_coords, width) {
-      # Placeholder for perpStart
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[1], y_coords[1]), each = 2)
-    }
+  # Preserve integer endpoint IDs for callers that use the original numeric IDs.
+  if (is.numeric(nodes$cluster_id) && all(nodes$cl == as.character(nodes$cluster_id)) &&
+      all(nodes$cluster_id == as.integer(nodes$cluster_id))) {
+    poly.Edges$g1 <- as.integer(poly.Edges$g1)
+    poly.Edges$g2 <- as.integer(poly.Edges$g2)
   }
-  if (!exists("perpMid")) {
-    perpMid <- function(x_coords, y_coords, width) {
-      # Placeholder for perpMid
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[2], y_coords[2]), each = 2)
-    }
-  }
-  if (!exists("perpEnd")) {
-    perpEnd <- function(x_coords, y_coords, width) {
-      # Placeholder for perpEnd
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[2], y_coords[2]), each = 2)
-    }
-  }
-  
-  
-  print(paste("Number of rows in line.segments:", nrow(line.segments)))
-  if (nrow(line.segments) == 0) {
-    stop("Error: The 'line.segments' data frame is empty. No edges to plot.")
-  }
-  
-  allEdges <- lapply(1:nrow(line.segments), edgeMaker, len = 50, curved = curved, line.segments=line.segments) # Reduced len for faster example
-  allEdges <- do.call(rbind, allEdges)  # a fine-grained path with bend
-  
-  
-  groups <- unique(allEdges$Group)
-  
-  poly.Edges <- data.frame(x=numeric(), y=numeric(), Group=character(),g1=integer(), g2=integer(),stringsAsFactors=FALSE)
-  imax <- as.numeric(length(groups))
-  
-  # Limiting iterations for poly.Edges generation for a faster example run
-  # In your actual use, remove or adjust this limit.
-  # max_poly_edges_iter <- min(imax, 50) # Process max 50 groups for quick testing
-  
-  for(i in 1:imax) {
-    #for(i in 1:max_poly_edges_iter) { # Use this line for faster testing
-    select.group <- groups[i]
-    select.edge <- allEdges[allEdges$Group %in% select.group,]
-    
-    x <- select.edge$x
-    y <- select.edge$y
-    w <- select.edge$fraction
-    
-    N <- length(x)
-    leftx <- numeric(N)
-    lefty <- numeric(N)
-    rightx <- numeric(N)
-    righty <- numeric(N)
-    
-    ## Start point
-    perps <- perpStart(x[1:2], y[1:2], w[1]/2)
-    leftx[1] <- perps[1, 1]
-    lefty[1] <- perps[1, 2]
-    rightx[1] <- perps[2, 1]
-    righty[1] <- perps[2, 2]
-    
-    ### mid points
-    for (ii in 2:(N - 1)) {
-      seq <- (ii - 1):(ii + 1)
-      perps <- perpMid(as.numeric(x[seq]), as.numeric(y[seq]), w[ii]/2)
-      leftx[ii] <- perps[1, 1]
-      lefty[ii] <- perps[1, 2]
-      rightx[ii] <- perps[2, 1]
-      righty[ii] <- perps[2, 2]
-    }
-    ## Last control point
-    perps <- perpEnd(x[(N-1):N], y[(N-1):N], w[N]/2)
-    leftx[N] <- perps[1, 1]
-    lefty[N] <- perps[1, 2]
-    rightx[N] <- perps[2, 1]
-    righty[N] <- perps[2, 2]
-    
-    lineleft <- data.frame(x=leftx, y=lefty)
-    lineright <- data.frame(x=rightx, y=righty)
-    lineright <- lineright[nrow(lineright):1, ]
-    lines.lr <- rbind(lineleft, lineright)
-    lines.lr$Group <- select.group
-    lines.lr[c("g1","g2")] <- as.integer(as.character(stringr::str_split_fixed(lines.lr$Group, '>', 2)))
-    
-    poly.Edges <- rbind(poly.Edges,lines.lr)
-    
-    #Sys.sleep(0.01) # Commented out for faster testing
-    #cat("\r", i, "of", imax) # Commented out for cleaner output
-  }
-  
+
   if (plot.parts == TRUE && !is.null(out.dir)) {
     write.csv(poly.Edges, file=file.path(out.dir,paste0(st,"poly.edges.csv"))) }
   
@@ -439,13 +300,14 @@ plot_constellation <- function (knn.cl.df,
   
   
   if(!is.null(edge_mark_list)){
+    edge_marking <- match.arg(edge_marking)
     if(edge_marking == "dim"){
-      poly.Edges$alpha_plot <- fg.alpha # Use a different column name to avoid conflict
+      poly.Edges$alpha_plot <- rep(fg.alpha, nrow(poly.Edges)) # Use a different column name to avoid conflict
       poly.Edges$alpha_plot[poly.Edges$g1 %in% edge_mark_list] <- bg.alpha
       poly.Edges$alpha_plot[poly.Edges$g2 %in% edge_mark_list] <- bg.alpha
       
     } else if(edge_marking == "highlight"){
-      poly.Edges$alpha_plot <- bg.alpha # Use a different column name
+      poly.Edges$alpha_plot <- rep(bg.alpha, nrow(poly.Edges)) # Use a different column name
       poly.Edges$alpha_plot[poly.Edges$g1 %in% edge_mark_list] <- fg.alpha
       poly.Edges$alpha_plot[poly.Edges$g2 %in% edge_mark_list] <- fg.alpha
       
@@ -454,20 +316,20 @@ plot_constellation <- function (knn.cl.df,
     }
     
   } else{
-    poly.Edges$alpha_plot <- fg.alpha # Use a different column name
+    poly.Edges$alpha_plot <- rep(fg.alpha, nrow(poly.Edges)) # Use a different column name
   }
   
   # --- FIX 2: Consolidate plot.all creation and fix alpha/text logic ---
   # Define the base plot structure once
-  base_plot <- ggplot() +
-    geom_polygon(data=poly.Edges,
+  base_plot <- ggplot() + theme_void() + theme(legend.position = "none")
+  if (nrow(poly.Edges) > 0L) {
+    base_plot <- base_plot + geom_polygon(data=poly.Edges,
                  aes(x=x, y=y, group=Group, alpha=alpha_plot, # Use new alpha_plot variable
                      # Add hover text for polygons (edges)
                      text = paste0("From: ", g1, "<br>To: ", g2)),
                  fill = "grey60") + # Explicit fill for polygons
-    scale_alpha_identity() + # FIX 2 (Crucial): Use scale_alpha_identity() for direct alpha values
-    theme_void() +
-    theme(legend.position = "none") # General theme for plot.all
+    scale_alpha_identity()
+  }
   
   # Add geom_point for nodes
   # FIX 3: Add 'text' aesthetic to geom_point for plotly hover info
@@ -601,6 +463,13 @@ plot_constellation <- function (knn.cl.df,
   ##      plot legends       ##
   ##                         ##
   #############################
+  # The CHARGE app only needs the interactive plot, not PDF legend grobs.
+  if (is.null(out.dir) || (enable_plotly && !plot.parts)) {
+    if (return.list) return(list(constellation = final_plot_output,
+                                 edges.df = poly.Edges, nodes.df = nodes))
+    return(invisible(NULL))
+  }
+
   # Legend plotting logic remains unchanged. These are for static PDFs.
   # Plotly handles its own legends interactively.
   # If you need static legend images for plotly output, you might need to
@@ -652,7 +521,7 @@ plot_constellation <- function (knn.cl.df,
   cl.center.legend <- cowplot::get_legend(cl.center)
   
   
-  width.1 <- max(line.segments$frac.from, line.segments$frac.to)
+  width.1 <- max(c(0, line.segments$frac.from, line.segments$frac.to))
   width.05 <- width.1/2
   width.025 <- width.1/4
   edge.width.data <- tibble(node.width = c(1, 1, 1),
@@ -691,6 +560,9 @@ plot_constellation <- function (knn.cl.df,
       geom_text(data = edge.width.data, aes(x = 2.7, y = y, label = fraction, hjust = 0, vjust = 0.5)) +
       annotate("text", x = 2, y = 6, label = "Fraction of edges \n to node")
   }
+  if (!nrow(line.segments)) edge.width.legend <- ggplot() + theme_void()
+  if (is.null(dot.size.legend)) dot.size.legend <- grid::nullGrob()
+  if (is.null(cl.center.legend)) cl.center.legend <- grid::nullGrob()
   layout_legend <- rbind(c(1, 3, 3, 3, 3),
                          c(2, 3, 3, 3, 3))
   if (plot.parts == TRUE & !is.null(out.dir)) {
@@ -749,10 +621,12 @@ edgeMaker <- function(whichRow, len=100, line.segments, curved=FALSE){
   bezierMid <- (fromC + toC + bezierMid) / 3  # Moderate the Bezier midpoint
   if(curved == FALSE){bezierMid <- (fromC + toC) / 2}  # Remove the curve
 
-  edge <- data.frame(bezier(c(fromC[1], bezierMid[1], toC[1]),  # Generate
-                            c(fromC[2], bezierMid[2], toC[2]),  # X & y
-                            evaluation = len))  # Bezier path coordinates
-  
+  t <- seq(0, 1, length.out = len)
+  edge <- data.frame(
+    x = (1 - t)^2 * fromC[1] + 2 * (1 - t) * t * bezierMid[1] + t^2 * toC[1],
+    y = (1 - t)^2 * fromC[2] + 2 * (1 - t) * t * bezierMid[2] + t^2 * toC[2]
+  )
+
   #line.width.from in 100 steps to linewidth.to
  edge$fraction <- seq(line.segments$ex.line.from[whichRow], line.segments$ex.line.to[whichRow], length.out = len)
 
