@@ -1,6 +1,5 @@
-
-#!/bin/sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
 echo "options(
   repos = c(CRAN = 'https://packagemanager.rstudio.com/all/__linux__/jammy/latest'),
@@ -41,8 +40,7 @@ install.packages(
     'stringr',
     'tibble',
     'umap',
-    'viridisLite',
-    'pkgload'
+    'viridisLite'
   ),
   dependencies = NA
 )
@@ -58,27 +56,20 @@ BiocManager::install(
 )
 
 BiocManager::install(
-  'beachmat',
-  ask = FALSE,
-  update = FALSE
+'beachmat',
+ask = FALSE,
+update = FALSE
 )
 
-remotes::install_git(
-  'https://github.com/AllenInstitute/scrattch.bigcat.git',
-  upgrade = 'never',
-  dependencies = TRUE
+remotes::install_github(
+'AllenInstitute/scrattch.bigcat',
+upgrade = 'never',
+dependencies = TRUE
 )
 
-remotes::install_version(
-  'rsvd',
-  version = '1.0.5',
-  repos = 'https://cloud.r-project.org',
-  upgrade = 'never'
-)
-
-remotes::install_git(
-  'https://github.com/AllenInstitute/CHARGE_taxonomy.git',
-  upgrade = 'never',
-  dependencies = FALSE
+remotes::install_github(
+'AllenInstitute/CHARGE_taxonomy',
+upgrade = 'never',
+dependencies = TRUE
 )
 "

@@ -3,4 +3,4 @@
 .RData
 .Ruserdata
 temp_code*
-.vscode
+code/.vscode/
