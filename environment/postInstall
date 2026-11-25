@@ -41,7 +41,8 @@ install.packages(
     'stringr',
     'tibble',
     'umap',
-    'viridisLite'
+    'viridisLite',
+    'pkgload'
   ),
   dependencies = NA
 )

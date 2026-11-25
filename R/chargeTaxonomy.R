@@ -65,6 +65,8 @@
 #' @param seed The seed to use for reproducibility
 #' 
 #' @import Matrix
+#' @import umap
+#' @import anndata
 #' 
 #' @examples
 #' \dontrun{
