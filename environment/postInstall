@@ -58,20 +58,27 @@ BiocManager::install(
 )
 
 BiocManager::install(
-'beachmat',
-ask = FALSE,
-update = FALSE
-)
-
-remotes::install_github(
-'AllenInstitute/scrattch.bigcat',
-upgrade = 'never',
-dependencies = TRUE
+  'beachmat',
+  ask = FALSE,
+  update = FALSE
 )
 
 remotes::install_git(
-  "https://github.com/AllenInstitute/CHARGE_taxonomy.git",
+  'https://github.com/AllenInstitute/scrattch.bigcat.git',
   upgrade = 'never',
   dependencies = TRUE
+)
+
+remotes::install_version(
+  'rsvd',
+  version = '1.0.5',
+  repos = 'https://cloud.r-project.org',
+  upgrade = 'never'
+)
+
+remotes::install_git(
+  'https://github.com/AllenInstitute/CHARGE_taxonomy.git',
+  upgrade = 'never',
+  dependencies = FALSE
 )
 "
