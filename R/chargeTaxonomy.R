@@ -35,6 +35,47 @@
 
 
 
+# Aggregate genes x cells by integer factor codes. The input stays sparse;
+# only the much smaller genes x groups result is converted to an R matrix.
+.charge_cl_sums <- function(mat, cl) {
+  if (!is.factor(cl) || length(cl) != ncol(mat) || anyNA(cl)) {
+    stop('CHARGE needs one nonmissing cluster factor value per matrix column.',
+         call. = FALSE)
+  }
+  if (!is.null(names(cl)) && !is.null(colnames(mat)) &&
+      !identical(names(cl), colnames(mat))) {
+    stop('CHARGE cluster labels and expression columns are not in the same cell order.',
+         call. = FALSE)
+  }
+  design <- Matrix::sparseMatrix(
+    i = seq_along(cl), j = as.integer(cl), x = 1,
+    dims = c(length(cl), nlevels(cl)),
+    dimnames = list(NULL, levels(cl))
+  )
+  out <- as.matrix(mat %*% design)
+  dimnames(out) <- list(rownames(mat), levels(cl))
+  out
+}
+
+.charge_cl_means <- function(mat, cl) {
+  totals <- .charge_cl_sums(mat, cl)
+  sizes <- tabulate(as.integer(cl), nbins = nlevels(cl))
+  sweep(totals, 2L, sizes, '/')
+}
+
+.charge_cl_vars <- function(mat, cl, means) {
+  sizes <- tabulate(as.integer(cl), nbins = nlevels(cl))
+  mean.sq <- .charge_cl_means(mat^2, cl)
+  # Sample variance; singleton and empty groups have undefined variance.
+  correction <- rep(NA_real_, length(sizes))
+  ok <- sizes > 1L
+  correction[ok] <- sizes[ok] / (sizes[ok] - 1L)
+  centered <- mean.sq - means^2
+  # Clamp tiny negative values caused by floating-point cancellation.
+  centered[!is.na(centered) & centered < 0] <- 0
+  sweep(centered, 2L, correction, '*')
+}
+
 #' Save an RData object for use with CHARGE app
 #' 
 #' Write an RData object with the following variables
@@ -65,8 +106,6 @@
 #' @param seed The seed to use for reproducibility
 #' 
 #' @import Matrix
-#' @import umap
-#' @import anndata
 #' 
 #' @examples
 #' \dontrun{
@@ -98,8 +137,19 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   if(!is.null(AIT.anndata)){
     library(anndata)
     metadata <- AIT.anndata$obs
+    # Capture the original AnnData observation order once. All AnnData
+    # observation-aligned arrays use this order, even without R row names.
+    cell.ids <- rownames(metadata)
+    if (is.null(cell.ids) || length(cell.ids) != nrow(metadata) ||
+        anyNA(cell.ids) || any(!nzchar(cell.ids)) || anyDuplicated(cell.ids)) {
+      stop('AnnData obs did not provide one unique cell ID per row.', call. = FALSE)
+    }
+    # A data frame whose row names are automatic has no usable observation IDs.
+    if (.row_names_info(metadata, type = 1L) < 0L) {
+      stop('AnnData obs has automatic R row numbers, not explicit cell IDs.', call. = FALSE)
+    }
   } else {
-    if(is.null(metadata)) error("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
+    if(is.null(metadata)) stop("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
   }
   
   ##########################
@@ -107,7 +157,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   if(!is.null(AIT.anndata)){
     hierarchy = names(AIT.anndata$uns$hierarchy)[order(-as.numeric(AIT.anndata$uns$hierarchy))]
   } else {
-    if(is.null(hierarchy)) error("AIT.anndata or hierarchy must be provided to run chargeTaxonomy.")
+    if(is.null(hierarchy)) stop("AIT.anndata or hierarchy must be provided to run chargeTaxonomy.")
   }
   
   ##########################
@@ -159,7 +209,8 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     
     obs.info.path <- file.path(stats.dir, 'obs_info.csv')
     if(file.exists(obs.info.path)){
-      obs.df <- data.table::fread(obs.info.path, data.table = FALSE)
+      obs.df <- data.table::fread(obs.info.path, data.table = FALSE,
+                                  colClasses = list(character = 1L))
       sample.names <- obs.df[[1]]
       metadata <- obs.df
       rownames(metadata) <- sample.names
@@ -178,15 +229,30 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     ## cell_counts
     print('... read and format cell counts.')
     if(!is.null(AIT.anndata)){
-      cell_counts <- AIT.anndata$raw$X
-      if(is.null(cell_counts)){
+      x.genes <- rownames(AIT.anndata$var)
+      raw <- AIT.anndata$raw
+      cell_counts <- if (is.null(raw)) NULL else raw$X
+      if (is.null(cell_counts)) {
         cell_counts <- AIT.anndata$X
-        if(is.null(cell_counts)){
-          stop('chargeTaxonomy requires raw counts in the raw$X slot or the X to run.')
+        count.genes <- x.genes
+        if (is.null(cell_counts)) {
+          stop('chargeTaxonomy requires counts in raw$X or X.', call. = FALSE)
         }
+      } else {
+        count.genes <- rownames(raw$var)
+        if (is.null(count.genes)) count.genes <- colnames(cell_counts)
       }
-      rownames(cell_counts) <- rownames(AIT.anndata)
-      colnames(cell_counts) <- colnames(AIT.anndata)
+      if (length(dim(cell_counts)) != 2L || nrow(cell_counts) != length(cell.ids)) {
+        stop('AnnData counts do not match the observation axis. IDs: ',
+             length(cell.ids), '; count dimensions: ',
+             paste(dim(cell_counts), collapse = ' x '), call. = FALSE)
+      }
+      if (length(count.genes) != ncol(cell_counts) || anyNA(count.genes) ||
+          any(!nzchar(count.genes)) || anyDuplicated(count.genes)) {
+        stop('AnnData counts need one unique feature ID per column from the matching var index.',
+             call. = FALSE)
+      }
+      dimnames(cell_counts) <- list(cell.ids, count.genes)
     } else {
       if(is.null(cell_counts)) stop('AIT.anndata or cell_counts must be provided to run chargeTaxonomy.')
     }
@@ -198,13 +264,26 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     print('... read and format normalized expression matrix.')
     if(!is.null(AIT.anndata)){
       norm_counts <- AIT.anndata$X
-      if(is.null(norm_counts)){
+      if (is.null(norm_counts)) {
         print('Creating normalized count matrix from cell_counts.')
-        norm_counts = log2CPM_byRow(cell_counts)
-      }
-      if(max(norm_counts) > 100){
-        print('Counts do not appear to be log-normalized; assuming X holds counts.')
-        norm_counts = log2CPM_byRow(cell_counts)
+        norm_counts <- log2CPM_byRow(cell_counts)
+      } else {
+        if (length(x.genes) != ncol(norm_counts) || anyNA(x.genes) ||
+            any(!nzchar(x.genes)) || anyDuplicated(x.genes) ||
+            nrow(norm_counts) != length(cell.ids)) {
+          stop('AnnData X does not match its obs and var indices.', call. = FALSE)
+        }
+        gene.idx <- match(all.genes, x.genes)
+        if (anyNA(gene.idx)) {
+          message('X lacks some raw count features; normalizing raw counts instead.')
+          norm_counts <- log2CPM_byRow(cell_counts)
+        } else {
+          norm_counts <- norm_counts[, gene.idx, drop = FALSE]
+          if (max(norm_counts) > 100) {
+            print('Counts do not appear to be log-normalized; using log2 CPM from cell_counts.')
+            norm_counts <- log2CPM_byRow(cell_counts)
+          }
+        }
       }
     } else {
       if(is.null(norm_counts))
@@ -230,12 +309,12 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     ##########################
     ## define transposes
     print('... transpose count matrix')
-    t_cell_counts  <- as(Matrix::t(cell_counts),'dgCMatrix')
+    t_cell_counts  <- methods::as(Matrix::t(cell_counts), 'CsparseMatrix')
     rownames(t_cell_counts) <- all.genes
     colnames(t_cell_counts) <- sample.names
     
     print('... transpose logCPM matrix')
-    t_norm_counts  <- as(Matrix::t(norm_counts),'dgCMatrix')
+    t_norm_counts  <- methods::as(Matrix::t(norm_counts), 'CsparseMatrix')
     rownames(t_norm_counts) <- all.genes
     colnames(t_norm_counts) <- sample.names
     
@@ -245,16 +324,16 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     count_n <- as.numeric(table(cluster_factor))
     names(count_n) <- all_clusters
     print('... sums')
-    sums    <- round(get_cl_sums(t_cell_counts,cluster_factor))
+    sums    <- round(.charge_cl_sums(t_cell_counts,cluster_factor))
     print('... counts')
-    counts  <- round(get_cl_sums(t_cell_counts>0,cluster_factor))
+    counts  <- round(.charge_cl_sums(t_cell_counts>0,cluster_factor))
     print('... props (calculated above)')
     props   <- t(t(counts)/as.numeric(count_n))
     print('... means')
-    means   <- get_cl_means(t_norm_counts,cluster_factor)
+    means   <- .charge_cl_means(t_norm_counts,cluster_factor)
     print('... sds')
     
-    sds     <- sqrt(get_cl_vars(t_norm_counts,cluster_factor,means))
+    sds     <- sqrt(.charge_cl_vars(t_norm_counts,cluster_factor,means))
   }
     
   #############################################################
@@ -263,29 +342,48 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   ##########################
   # variable.genes
   print("... read in or calculate variable genes.")
-  if(!is.null(AIT.anndata)){
-    if(is.null(AIT.anndata$var$highly_variable_genes_standard)){
-      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
-      betaScore      <- sort(betaScore)
-      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
-    } else {
-      variable.genes <- all.genes[AIT.anndata$var$highly_variable_genes_standard]
+  explicit.genes <- !is.null(variable.genes)
+  if (!explicit.genes) {
+    variable.genes <- character()
+    if (!is.null(AIT.anndata)) {
+      var <- AIT.anndata$var
+      hvg <- var[['highly_variable_genes_standard']]
+      if (!is.null(hvg)) {
+        variable.genes <- intersect(rownames(var)[which(as.logical(hvg))], all.genes)
+      }
     }
-  } else {
-    if(is.null(variable.genes)) {
-      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
-      betaScore      <- sort(betaScore)
-      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
+    if (length(variable.genes) < 50L) {
+      detected <- matrixStats::rowMaxs(as.matrix(props), na.rm = TRUE)
+      eligible <- which(is.finite(detected) & detected > 0.5)
+      if (length(eligible)) {
+        beta.rank <- getBetaScore_fast(props[eligible, , drop = FALSE],
+                                       returnScore = FALSE)
+        beta.genes <- rownames(props)[eligible[order(beta.rank, na.last = NA)]]
+        variable.genes <- head(unique(c(variable.genes, intersect(beta.genes, all.genes))), 1200L)
+      }
+    }
+    if (length(variable.genes) < 50L && !is.null(t_norm_counts) && ncol(t_norm_counts) > 1L) {
+      # Supplement a small subset's feature list using variance across its cells.
+      mu <- Matrix::rowMeans(t_norm_counts)
+      gene.var <- Matrix::rowMeans(t_norm_counts^2) - mu^2
+      ranked <- order(gene.var, decreasing = TRUE, na.last = NA)
+      ranked <- ranked[is.finite(gene.var[ranked]) & gene.var[ranked] > 0]
+      variable.genes <- head(unique(c(variable.genes, rownames(t_norm_counts)[ranked])), 1200L)
+      message('Supplemented feature selection with within-subset expression variance.')
     }
   }
-  variable.genes <- intersect(variable.genes,all.genes)
-  if(length(variable.genes)<50) error("<50 valid variable.genes, potentially due to misalignment between count matrix column names and variable.genes input. chargeTaxonomy cannot run with so few valid genes.")
-  
+  variable.genes <- intersect(variable.genes, all.genes)
+  if (length(variable.genes) < 50L) {
+    stop('CHARGE found ', length(variable.genes), ' valid variable genes; at least 50 are required. ',
+         'Check the feature IDs and the number of variable genes in the subset.', call. = FALSE)
+  }
+
  ##########################
   ## principal components
   print('... calculate principal components.')
   if(!is.null(stats.dir) && file.exists(file.path(stats.dir, 'rd_dat.csv'))){
-    rd.df <- data.table::fread(file.path(stats.dir, 'rd_dat.csv'), data.table = FALSE)
+    rd.df <- data.table::fread(file.path(stats.dir, 'rd_dat.csv'), data.table = FALSE,
+                               colClasses = list(character = 1L))
     rn <- rd.df[[1]]
     rd.dat <- as.matrix(rd.df[,-1, drop = FALSE])
     rownames(rd.dat) <- rn
@@ -307,19 +405,38 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   # embedding
   print('... read in or calculate UMAP')
   if(!is.null(stats.dir) && file.exists(file.path(stats.dir, 'umap.csv'))){
-    umap.raw <- data.table::fread(file.path(stats.dir, 'umap.csv'), data.table = FALSE)
-    rn <- umap.raw[[1]]
-    umap.df <- as.data.frame(umap.raw[,-1, drop = FALSE])
-    rownames(umap.df) <- rn
-    umap.df <- umap.df[sample.names, , drop = FALSE]
+    umap.raw <- data.table::fread(file.path(stats.dir, 'umap.csv'),
+                                  data.table = FALSE,
+                                  colClasses = list(character = 1L))
+    umap.idx <- match(sample.names, umap.raw[[1L]])
+    if (anyNA(umap.idx)) stop('The precomputed UMAP is missing one or more CHARGE cell IDs.')
+    umap.df <- umap.raw[umap.idx, -1L, drop = FALSE]
   } else if(!is.null(AIT.anndata)){
     embedding <- NULL
-    if(length(AIT.anndata$obsm)>0){
-      embedding <- AIT.anndata$uns$default_embedding[[1]]
-      if(is.null(embedding)) embedding = names(AIT.anndata$obsm)[1]
+    obsm <- AIT.anndata$obsm
+    default.embedding <- as.character(unlist(AIT.anndata$uns$default_embedding,
+                                             use.names = FALSE))
+    # Prefer the declared 2-D embedding, then X_umap. Preserve the previous
+    # first-embedding fallback only if it is itself two-dimensional.
+    first.embedding <- names(obsm)[1L]
+    candidates <- unique(c(default.embedding, 'X_umap', first.embedding))
+    candidates <- candidates[!is.na(candidates) & candidates %in% names(obsm)]
+    for (key in candidates) {
+      coords <- obsm[[key]]
+      if (length(dim(coords)) == 2L && ncol(coords) == 2L) {
+        embedding <- key
+        break
+      }
     }
-    if(length(embedding)==1){
-      umap.df <- AIT.anndata$obsm[[embedding]][sample.names,]
+    if (!is.null(embedding)) {
+      # AnnData obsm is aligned positionally to the original obs, not to
+      # potentially subsampled/reordered metadata from the stats bundle.
+      umap.idx <- match(sample.names, cell.ids)
+      if (is.null(cell.ids) || anyNA(cell.ids) || anyDuplicated(cell.ids) || anyNA(umap.idx) ||
+          nrow(coords) != length(cell.ids)) {
+        stop('Cannot align AIT embedding ', embedding, ' to CHARGE cell IDs.')
+      }
+      umap.df <- coords[umap.idx, , drop = FALSE]
     } else {
       umap.df <- umap(rd.dat)$layout
     }
@@ -327,10 +444,15 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     if(is.null(embedding)) {
       umap.df <- umap(rd.dat)$layout
     } else {
-      umap.df <- embedding[sample.names,]
+      umap.df <- embedding[sample.names, , drop = FALSE]
     }
   }
   umap.df <- as.data.frame(umap.df)
+  if (nrow(umap.df) != length(sample.names) || ncol(umap.df) < 2L || !all(vapply(umap.df[1:2], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(umap.df[1:2])))) {
+    stop('CHARGE needs two finite numeric embedding coordinates per cell.')
+  }
+  # Local R output for downstream CHARGE code.
   rownames(umap.df) <- sample.names
   
   
@@ -356,9 +478,9 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   } else if(weight.by != 'cluster'){
     # NOTE: THIS TREATS EACH CELL WITH THE SAME WEIGHT (e.g., BIGGER CLUSTER GET WEIGHTED HIGHER)
     if(weight.by != 'cell') warning("weight.by is not set to 'cell' or 'cluster'; defaulting to 'cell'.")
-    for (i in 2:length(hierarchy)){
+    for (i in seq_along(hierarchy)[-1L]){
       print(paste(hierarchy[i],'........',i,'of',length(hierarchy)))
-      cluster_vector2 = AIT.anndata$obs[,hierarchy[i]][keep_sample]
+      cluster_vector2 <- metadata[sample.names, hierarchy_old[[hierarchy[i]]], drop = TRUE]
       all_clusters2   = unique(cluster_vector2)
       if(is.factor(all_clusters2))
         all_clusters2 = levels(all_clusters2)
@@ -369,16 +491,16 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
       count_n <- c(count_n,as.numeric(table(cluster_factor2)))
       names(count_n) <- c(nm,all_clusters2)
       print('... sums')
-      sums    <- cbind(sums,round(get_cl_sums(t_cell_counts,cluster_factor2)))
+      sums    <- cbind(sums,round(.charge_cl_sums(t_cell_counts,cluster_factor2)))
       print('... counts')
-      counts  <- cbind(counts,round(get_cl_sums(t_cell_counts>0,cluster_factor2)))
+      counts  <- cbind(counts,round(.charge_cl_sums(t_cell_counts>0,cluster_factor2)))
       print('... props')
       props   <- cbind(props,t(t(counts)/as.numeric(count_n)))
       print('... means')
-      means2  <- get_cl_means(t_norm_counts,cluster_factor2)
+      means2  <- .charge_cl_means(t_norm_counts,cluster_factor2)
       means   <- cbind(means,means2)
       print('... sds')
-      sds     <- cbind(sds,sqrt(get_cl_vars(t_norm_counts,cluster_factor2,means2)))
+      sds     <- cbind(sds,sqrt(.charge_cl_vars(t_norm_counts,cluster_factor2,means2)))
     }
   } else {
     # NOTE: THIS SUMMARIZES EVERYTHING BY CLUSTER, TREATING EACH CLUSTER WITH THE SAME WEIGHT
@@ -402,91 +524,68 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   print("===== Build the constellation plots =====")
   
   constellation <- list()
-  for (level in hierarchy){
-    print(paste("... creating constellation for",level))
-    cl.cl <- metadata[rownames(rd.dat), hierarchy_old[level]]
-    cl.cl <- as.character(cl.cl)
-    names(cl.cl) <- rownames(rd.dat)
-    result = get_knn_graph(rd.dat, cl=cl.cl, k =50) 
-    
-    ## Select robust edges for plotting
-    knn.cl.df = result$knn.cl.df 
-    knn.cl.df = knn.cl.df %>% group_by(cl.from) %>% mutate(cl.from.rank = rank(-Freq))
-    knn.cl.df = knn.cl.df %>% group_by(cl.to) %>% mutate(cl.to.rank = rank(-Freq))
-    select.knn.cl.df = with(knn.cl.df, knn.cl.df[odds > 1 & pval.log < log(1/100000) & (frac > 0.1 | frac > 0.03 & Freq > 100) & (cl.from.rank < 4| cl.to.rank < 4),])
-    
-    ## Reorganize the cluster_info matrix for the information required for plotConstellation
-    ## --- THIS SECTION NEEDS TO BE EDITED!
-    prefix = level
-    
-    cl.center.df = as.data.frame(get_RD_cl_center(umap.df,cl.cl)) 
-    cl.center.df$x <- cl.center.df$x + runif(length(cl.center.df$x), -0.000001, 0.000001)  # Small jitter
-    cl.center.df$y <- cl.center.df$y + runif(length(cl.center.df$y), -0.000001, 0.000001)  # Small jitter
-    
-    ## Define cl.df
-    types <- rownames(cl.center.df)
-    cl.df <- cluster_info[,paste0(level,c("_id","_label","_color"))]
-    cl.df <- cl.df[match(unique(cl.df[,1]),cl.df[,1]),]
-    rownames(cl.df) <- cl.df[,2]
-    cl.df <- cl.df[types,]
-    cl.df$cluster_size <- count_n[types]
-    
-    ## Define cl.center.df (centroids for clusters)
-    cl.center.df$cluster_id    <- cl.df[,1]  # id column
-    cl.center.df$cluster_label <- rownames(cl.df)
-    cl.center.df$cluster_color <- cl.df[,3]  # color column
-    cl.center.df$cluster_size  <- cl.df$cluster_size
-    rownames(cl.center.df)     <- rownames(cl.df)
-    
-    # Set cl as cluster_id since that was used to summarise the edges
-    cl.center.df$cl <- cl.df[,1]  # The _id column
-    
-    # Convert labels to ids 
-    select.knn.cl.df$cl.from <- cl.df[,1][match(select.knn.cl.df$cl.from,cl.df[,2])]
-    select.knn.cl.df$cl.to   <- cl.df[,1][match(select.knn.cl.df$cl.to,cl.df[,2])]
-    
-    # Define the edges (I think that is what tmp.knn.cl.df does???)
-    tmp.cl = cl.center.df$cluster_id
-    tmp.knn.cl.df = select.knn.cl.df %>% filter(cl.from %in% tmp.cl & cl.to %in% tmp.cl)
-    
-    # Create the plot
-    c.plot=try(plot_constellation(tmp.knn.cl.df, 
-                                  cl.center.df=cl.center.df, 
-                                  out.dir=NULL,
-                                  prefix=prefix,
-                                  node.label="cluster_label",
-                                  exxageration=2,
-                                  plot.parts=FALSE,
-                                  return.list = T,
-                                  node.dodge = F,
-                                  label_repel = TRUE,
-                                  label.size = 3,
-                                  plot.height = 15,
-                                  plot.width = 15,
-                                  max_size = 5,
-                                  enable_plotly = TRUE,
-                                  plotly_labels_on_plot = TRUE))
-    if(class(c.plot)[1]=="try-error") {
-      constellation[[level]] <- plot_ly() %>%
-        add_annotations(
-          text = paste("No constellation diagram for",level),
-          x = 0.5, y = 0.5,          # Center coordinates
-          xref = "paper", yref = "paper", # Relative to plot area
-          showarrow = FALSE,
-          font = list(size = 36, color = "black") # Basic font styling
-        ) %>%
-        layout(
-          xaxis = list(visible = FALSE), # Hide X-axis
-          yaxis = list(visible = FALSE), # Hide Y-axis
-          # Optional: make background transparent if embedding or don't want default gray
-          plot_bgcolor = 'rgba(0,0,0,0)',
-          paper_bgcolor = 'white'
-        )
-    } else {
-      constellation[[level]] <- c.plot$constellation
+  pca.cell.ids <- rownames(rd.dat)
+  if (is.null(pca.cell.ids) || anyDuplicated(pca.cell.ids) ||
+      !all(pca.cell.ids %in% rownames(metadata)) || !all(pca.cell.ids %in% rownames(umap.df))) {
+    stop('Cannot align PCA rows, metadata and UMAP rows by cell ID.')
+  }
+  xy <- as.matrix(umap.df[pca.cell.ids, 1:2, drop = FALSE])
+  for (level in hierarchy) {
+    message('... creating constellation for ', level)
+    cl.cl <- as.character(metadata[pca.cell.ids, hierarchy_old[[level]], drop = TRUE])
+    # Use the same missing-label convention as auto_annotate().
+    cl.cl[is.na(cl.cl)] <- 'ZZ_Missing'
+    names(cl.cl) <- pca.cell.ids
+    types <- unique(cl.cl)
+    groups <- factor(cl.cl, levels = types)
+    sizes <- tabulate(as.integer(groups), nbins = length(types))
+    centers <- rowsum(xy, groups, reorder = FALSE) / sizes
+
+    info <- paste0(level, c('_id', '_label', '_color'))
+    type.idx <- match(types, as.character(cluster_info[[info[2L]]]))
+    if (anyNA(type.idx)) {
+      stop('No cluster annotation at level ', level, ' for: ',
+           paste(types[is.na(type.idx)], collapse = ', '))
     }
-  } 
-  
+    node.ids <- cluster_info[[info[1L]]][type.idx]
+    cl.center.df <- data.frame(
+      x = centers[, 1L], y = centers[, 2L], cl = as.character(node.ids),
+      cluster_id = node.ids, cluster_label = types,
+      cluster_color = as.character(cluster_info[[info[3L]]][type.idx]),
+      cluster_size = sizes, row.names = types
+    )
+
+    selected <- data.frame(cl.from = character(), cl.to = character(),
+                           Freq = numeric(), frac = numeric())
+    if (length(types) > 1L && length(pca.cell.ids) > 1L) {
+      knn.cl.df <- get_knn_graph(rd.dat, cl = cl.cl,
+                                 k = min(50L, length(pca.cell.ids)))$knn.cl.df
+      knn.cl.df <- knn.cl.df %>%
+        dplyr::group_by(cl.from) %>% dplyr::mutate(cl.from.rank = rank(-Freq)) %>%
+        dplyr::group_by(cl.to) %>% dplyr::mutate(cl.to.rank = rank(-Freq)) %>%
+        dplyr::ungroup()
+      selected <- dplyr::filter(
+        knn.cl.df, odds > 1, pval.log < log(1/100000),
+        frac > 0.1 | (frac > 0.03 & Freq > 100),
+        cl.from.rank < 4 | cl.to.rank < 4
+      )
+      selected$cl.from <- cl.center.df$cl[match(selected$cl.from, types)]
+      selected$cl.to <- cl.center.df$cl[match(selected$cl.to, types)]
+    }
+
+    c.plot <- tryCatch(
+      plot_constellation(selected, cl.center.df = cl.center.df, out.dir = NULL,
+                         prefix = level, node.label = 'cluster_label',
+                         exxageration = 2, plot.parts = FALSE, return.list = TRUE,
+                         node.dodge = FALSE, label_repel = TRUE, label.size = 3,
+                         plot.height = 15, plot.width = 15, max_size = 5,
+                         enable_plotly = TRUE, plotly_labels_on_plot = TRUE),
+      error = function(e) stop('Constellation failed for ', level, ': ',
+                               conditionMessage(e), call. = FALSE)
+    )
+    constellation[[level]] <- c.plot$constellation
+  }
+
   #############################################################
   print("===== Save CHARGE file =====")
   save(
