@@ -1,5 +1,11 @@
+# Standalone CHARGE taxonomy generator: source() this file in R.
+# No scrattch packages are required. Standard R dependencies must be installed.
+# Hybrid mode also needs the existing h5ad_to_charge_stats.py companion.
+# Validate generated artifacts against a known reference before production use.
+
 library(dplyr)
 library(matrixStats)
+library(Matrix)
 
 # Helper function for reading stats matrix
 # 
@@ -38,6 +44,31 @@ library(matrixStats)
 
 
 
+## NEW FUNCTION
+# Compact a CHARGE display widget after its traces and annotations are built.
+# These plots are saved for display, not for adding further R-side layers.
+compact_charge_constellation <- function(p) {
+  if (!inherits(p, 'plotly')) stop('Expected a Plotly constellation widget.')
+  if (is.null(p$preRenderHook) && is.null(p$x$attrs) && is.null(p$x$visdat) &&
+      length(p$x$data) && !is.null(p$x$layout)) return(p)
+  p <- plotly::plotly_build(p)
+  if (!length(p$x$data) || is.null(p$x$layout)) {
+    stop('The constellation did not build traces and a layout.')
+  }
+  p$x[c('attrs', 'visdat', 'cur_data', 'layoutAttrs')] <- NULL
+  p$preRenderHook <- NULL
+  # renderPlotly() explicitly calls plotly_build(), independently of the hook.
+  # Fail here, rather than write an artifact incompatible with this Plotly runtime.
+  check <- plotly::plotly_build(p)
+  coords <- function(w) lapply(w$x$data, function(tr) list(x = tr$x, y = tr$y))
+  labels <- function(w) lapply(w$x$layout$annotations, function(a) a$text)
+  if (!isTRUE(all.equal(coords(p), coords(check), check.attributes = FALSE)) ||
+      !identical(labels(p), labels(check))) {
+    stop('This Plotly version changes constellation coordinates or labels when rebuilding a compact widget.')
+  }
+  p
+}
+
 #' Save an RData object for use with CHARGE app
 #' 
 #' Write an RData object with the following variables
@@ -50,7 +81,7 @@ library(matrixStats)
 #'  - hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
 #'  - cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
 #'  - constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
-#'  **NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.**
+#' Validate generated files against a known reference before production use.
 #'
 #' @param AIT.anndata A reference taxonomy anndata object.  If provided, must contain counts in X or raw$X, uns$hierarchy, and obs (with columns for the hierarchy), and can optionally contain both X and raw$X and default embeddings and variable genes.  See https://github.com/AllenInstitute/AllenInstituteTaxonomy for details on expected formatting. If provided, this variable takes priority over the variables for ingesting these items separately.
 #' @param cell_counts A sparse matrix of read counts where ROWS are cells and COLUMNS are genes, and both row names containing gene names (symbols or IDs) and column names containing unique IDs are included. Ignored if AIT.anndata is provided.
@@ -58,7 +89,7 @@ library(matrixStats)
 #' @param metadata A matrix of cell metadata where ROWS are cells, COLUMNS are any metadata but that must include columns for each cell type level in the hierarchy. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.
 #' @param hierarchy A character vector listing the columns corresponding to the cell hierarchy, with the highest resolution type (e.g., cluster) listed first and the lowest resolution type (e.g., class) listed last. Ignored if AIT.anndata is provided.
 #' @param embedding OPTIONAL. A matrix where ROWS are cells and the first two COLUMNS correspond to x and y dimensions of a two dimensional embedding (e.g., UMAP or tSNE), with values corresponding to the specific X,Y coordinates for the embedding. Any other columns are ignored. Row names in metadata MUST match row names in cell_counts. Ignored if AIT.anndata is provided.
-#' @param variable.genes OPTIONAL. A character vector of genes to use for calculating the embedding (if not provided) and the constellation diagram. Typically this corresponds to a set of variable or differentially expressed genes. Must be a subset of gene names included as column names for cell_counts. Ignored if AIT.anndata is provided.
+#' @param variable.genes OPTIONAL. Feature IDs to use for PCA and constellation overlap. If omitted, CHARGE selects genes automatically.
 #' @param check.taxonomy Should the function check if the input variable is a valid AIT taxonomy (default = TRUE)
 #' @param subsample How much subsampling should be done before running statistics. Default (recommended!) is none, but subsampling can be done to speed up calculations.
 #' @param stats.dir A directory that includes precomputed statistics from chargeTaxonomyHybrid. Typically this should be left as default (NULL) with chargeTaxonomyHybrid run directly if python is to be used.
@@ -99,9 +130,14 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   print("... read metadata and underlying hierarchy.")
   if(!is.null(AIT.anndata)){
     library(anndata)
-    metadata <- AIT.anndata$obs
+    metadata <- as.data.frame(AIT.anndata$obs)
+    obs.ids <- rownames(metadata)
+    if (.row_names_info(metadata, type = 1L) < 0L || length(obs.ids) != nrow(metadata) || anyNA(obs.ids) ||
+        any(!nzchar(obs.ids)) || anyDuplicated(obs.ids)) {
+      stop('AnnData obs requires one unique cell ID per row.', call. = FALSE)
+    }
   } else {
-    if(is.null(metadata)) error("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
+    if(is.null(metadata)) stop("AIT.anndata or metadata must be provided to run chargeTaxonomy.")
   }
   
   ##########################
@@ -109,17 +145,21 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   if(!is.null(AIT.anndata)){
     hierarchy = names(AIT.anndata$uns$hierarchy)[order(-as.numeric(AIT.anndata$uns$hierarchy))]
   } else {
-    if(is.null(hierarchy)) error("AIT.anndata or hierarchy must be provided to run chargeTaxonomy.")
+    if(is.null(hierarchy)) stop("AIT.anndata or hierarchy must be provided to run chargeTaxonomy.")
   }
   
   ##########################
   # cluster_info
   print("... define cluster information.")
-  cluster_vector = metadata[,hierarchy[1]]
+  metadata <- as.data.frame(metadata)
+  if (!length(hierarchy) || !all(hierarchy %in% names(metadata))) {
+    stop('CHARGE hierarchy fields must name columns in the observation metadata.')
+  }
+  cluster_vector <- metadata[[hierarchy[1L]]]
   all_clusters   = unique(cluster_vector)
   if(is.factor(all_clusters)) 
-    all_clusters = levels(all_clusters)
-  cluster_info = metadata[match(all_clusters,metadata[,hierarchy[1]]),hierarchy]
+    all_clusters = levels(droplevels(all_clusters))
+  cluster_info <- metadata[match(all_clusters, cluster_vector), hierarchy, drop = FALSE]
   
   # Rename anything called "_id" or "_label" to avoid breaking some scripts
   hierarchy_old <- hierarchy
@@ -134,7 +174,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   ## NOTE: I'LL NEED TO UPDATE THIS PART ONCE I SORT OUT HOW TO EMBED CLUSTER 
   ##       COLORS (AND CLUSTER ORDER?) WITHIN THE CLUSTER_INFO DATA FRAME
   cluster_info$sample_name = paste0("i",1:dim(cluster_info)[1])
-  for (i in 1:dim(cluster_info)[2]){
+  for (i in seq_len(ncol(cluster_info))){
     cluster_info[,i] <- factor(cluster_info[,i],levels = unique(cluster_info[,i]))
   }    
   cluster_info <- auto_annotate(cluster_info)
@@ -143,7 +183,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   # Subsample vector
   print("... define subsampling, if any.")
   set.seed(seed)
-  keep_sample <- subsampleCells(cluster_vector,subsample)
+  keep_sample <- subsampleCells(cluster_vector, subsample, seed = seed)
   
   #############################################################
   ## Heavy-data block: either read from Python outputs or fall back to original R logic
@@ -161,7 +201,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     
     obs.info.path <- file.path(stats.dir, 'obs_info.csv')
     if(file.exists(obs.info.path)){
-      obs.df <- data.table::fread(obs.info.path, data.table = FALSE)
+      obs.df <- data.table::fread(obs.info.path, data.table = FALSE, colClasses = list(character = 1L))
       sample.names <- obs.df[[1]]
       metadata <- obs.df
       rownames(metadata) <- sample.names
@@ -180,15 +220,20 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     ## cell_counts
     print('... read and format cell counts.')
     if(!is.null(AIT.anndata)){
-      cell_counts <- AIT.anndata$raw$X
-      if(is.null(cell_counts)){
-        cell_counts <- AIT.anndata$X
-        if(is.null(cell_counts)){
-          stop('chargeTaxonomy requires raw counts in the raw$X slot or the X to run.')
-        }
+      x.genes <- rownames(AIT.anndata$var)
+      raw <- AIT.anndata$raw
+      cell_counts <- if (is.null(raw)) NULL else raw$X
+      count.genes <- if (is.null(cell_counts)) x.genes else rownames(raw$var)
+      if (is.null(cell_counts)) cell_counts <- AIT.anndata$X
+      if (is.null(cell_counts) || nrow(cell_counts) != length(obs.ids)) {
+        stop('AnnData counts are unavailable or do not match obs.', call. = FALSE)
       }
-      rownames(cell_counts) <- rownames(AIT.anndata)
-      colnames(cell_counts) <- colnames(AIT.anndata)
+      if (is.null(count.genes)) count.genes <- colnames(cell_counts)
+      if (length(count.genes) != ncol(cell_counts) || anyNA(count.genes) ||
+          any(!nzchar(count.genes)) || anyDuplicated(count.genes)) {
+        stop('AnnData counts require one unique feature ID per column.', call. = FALSE)
+      }
+      dimnames(cell_counts) <- list(obs.ids, count.genes)
     } else {
       if(is.null(cell_counts)) stop('AIT.anndata or cell_counts must be provided to run chargeTaxonomy.')
     }
@@ -200,13 +245,21 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     print('... read and format normalized expression matrix.')
     if(!is.null(AIT.anndata)){
       norm_counts <- AIT.anndata$X
-      if(is.null(norm_counts)){
-        print('Creating normalized count matrix from cell_counts.')
-        norm_counts = log2CPM_byRow(cell_counts)
+      if (!is.null(norm_counts)) {
+        if (nrow(norm_counts) != length(obs.ids) || length(x.genes) != ncol(norm_counts) ||
+            anyNA(x.genes) || anyDuplicated(x.genes)) {
+          stop('AnnData X does not match its obs and var indices.', call. = FALSE)
+        }
+        gene.idx <- match(all.genes, x.genes)
+        if (anyNA(gene.idx)) {
+          message('X lacks some raw features; normalizing raw counts.')
+          norm_counts <- NULL
+        } else {
+          norm_counts <- norm_counts[, gene.idx, drop = FALSE]
+        }
       }
-      if(max(norm_counts) > 100){
-        print('Counts do not appear to be log-normalized; assuming X holds counts.')
-        norm_counts = log2CPM_byRow(cell_counts)
+      if (is.null(norm_counts) || max(norm_counts) > 100) {
+        norm_counts <- log2CPM_byRow(cell_counts)
       }
     } else {
       if(is.null(norm_counts))
@@ -219,8 +272,8 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     ## subset variables and define cluster_factor
     if(mean(keep_sample) < 1 ){
       print('... subsample count matrix')
-      cell_counts  <- cell_counts[keep_sample,]
-      norm_counts  <- norm_counts[keep_sample,]
+      cell_counts  <- cell_counts[keep_sample, , drop = FALSE]
+      norm_counts  <- norm_counts[keep_sample, , drop = FALSE]
       sample.names <- all.sample.names[keep_sample]
       cluster_vector <- cluster_vector[keep_sample]
     } else {
@@ -232,12 +285,12 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     ##########################
     ## define transposes
     print('... transpose count matrix')
-    t_cell_counts  <- as(Matrix::t(cell_counts),'dgCMatrix')
+    t_cell_counts  <- methods::as(Matrix::t(cell_counts), "CsparseMatrix")
     rownames(t_cell_counts) <- all.genes
     colnames(t_cell_counts) <- sample.names
     
     print('... transpose logCPM matrix')
-    t_norm_counts  <- as(Matrix::t(norm_counts),'dgCMatrix')
+    t_norm_counts  <- methods::as(Matrix::t(norm_counts), "CsparseMatrix")
     rownames(t_norm_counts) <- all.genes
     colnames(t_norm_counts) <- sample.names
     
@@ -263,31 +316,46 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   print("===== Calculate distances and embeddings =====")
   
   ##########################
-  # variable.genes
-  print("... read in or calculate variable genes.")
-  if(!is.null(AIT.anndata)){
-    if(is.null(AIT.anndata$var$highly_variable_genes_standard)){
-      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
-      betaScore      <- sort(betaScore)
-      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
-    } else {
-      variable.genes <- all.genes[AIT.anndata$var$highly_variable_genes_standard]
+  # Variable genes are needed only when PCA has not been precomputed.
+  has.precomputed.pca <- !is.null(stats.dir) && file.exists(file.path(stats.dir, 'rd_dat.csv'))
+  if (!has.precomputed.pca) {
+    if (is.null(t_norm_counts)) stop('Precomputed stats require rd_dat.csv for PCA coordinates.')
+    print('... read in or calculate variable genes.')
+    if (is.null(variable.genes)) {
+      variable.genes <- character()
+      if (!is.null(AIT.anndata)) {
+        v <- AIT.anndata$var
+        hvg <- v[['highly_variable_genes_standard']]
+        if (!is.null(hvg)) variable.genes <- intersect(rownames(v)[which(as.logical(hvg))], all.genes)
+      }
+      if (length(variable.genes) < 50L) {
+        max.det <- matrixStats::rowMaxs(as.matrix(props), na.rm = TRUE)
+        eligible <- which(is.finite(max.det) & max.det > 0.5)
+        if (length(eligible)) {
+          r <- getBetaScore_fast(props[eligible, , drop = FALSE], returnScore = FALSE)
+          variable.genes <- head(unique(c(variable.genes,
+                                          intersect(rownames(props)[eligible[order(r)]], all.genes))), 1200L)
+        }
+      }
+      if (length(variable.genes) < 50L && !is.null(t_norm_counts) && ncol(t_norm_counts) > 1L) {
+        v <- Matrix::rowMeans(t_norm_counts^2) - Matrix::rowMeans(t_norm_counts)^2
+        i <- order(v, decreasing = TRUE, na.last = NA)
+        i <- i[is.finite(v[i]) & v[i] > 0]
+        variable.genes <- head(unique(c(variable.genes, all.genes[i])), 1200L)
+      }
     }
-  } else {
-    if(is.null(variable.genes)) {
-      betaScore      <- getBetaScore_fast(props[rowMaxs(props)>0.5,1:length(all_clusters)],returnScore=FALSE)
-      betaScore      <- sort(betaScore)
-      variable.genes <- names(betaScore)[1:min(1200,length(betaScore))]
+    variable.genes <- intersect(variable.genes, all.genes)
+    if (length(variable.genes) < 50L) {
+      stop('CHARGE found ', length(variable.genes), ' valid variable genes; needs at least 50.',
+           call. = FALSE)
     }
   }
-  variable.genes <- intersect(variable.genes,all.genes)
-  if(length(variable.genes)<50) error("<50 valid variable.genes, potentially due to misalignment between count matrix column names and variable.genes input. chargeTaxonomy cannot run with so few valid genes.")
   
   ##########################
   ## principal components
   print('... calculate principal components.')
   if(!is.null(stats.dir) && file.exists(file.path(stats.dir, 'rd_dat.csv'))){
-    rd.df <- data.table::fread(file.path(stats.dir, 'rd_dat.csv'), data.table = FALSE)
+    rd.df <- data.table::fread(file.path(stats.dir, 'rd_dat.csv'), data.table = FALSE, colClasses = list(character = 1L))
     rn <- rd.df[[1]]
     rd.dat <- as.matrix(rd.df[,-1, drop = FALSE])
     rownames(rd.dat) <- rn
@@ -301,6 +369,7 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
                     max.pca = 50,
                     sampled.cells=sample.names,
                     th=0.5)
+    if (is.null(rd.dat$rd.dat)) stop("PCA did not return any components for this subset.")
     rd.dat <- rd.dat$rd.dat
     rownames(rd.dat) <- sample.names
   }
@@ -308,33 +377,48 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   ##########################
   # embedding
   print('... read in or calculate UMAP')
-  if(!is.null(stats.dir) && file.exists(file.path(stats.dir, 'umap.csv'))){
-    umap.raw <- data.table::fread(file.path(stats.dir, 'umap.csv'), data.table = FALSE)
-    rn <- umap.raw[[1]]
-    umap.df <- as.data.frame(umap.raw[,-1, drop = FALSE])
-    rownames(umap.df) <- rn
-    umap.df <- umap.df[sample.names, , drop = FALSE]
-  } else if(!is.null(AIT.anndata)){
-    embedding <- NULL
-    if(length(AIT.anndata$obsm)>0){
-      embedding <- AIT.anndata$uns$default_embedding[[1]]
-      if(is.null(embedding)) embedding = names(AIT.anndata$obsm)[1]
+  umap.df <- NULL
+  if (!is.null(stats.dir) && file.exists(file.path(stats.dir, 'umap.csv'))) {
+    u <- data.table::fread(file.path(stats.dir, 'umap.csv'), data.table = FALSE,
+                           colClasses = list(character = 1L))
+    idx <- match(sample.names, u[[1L]])
+    if (anyNA(idx) || anyDuplicated(u[[1L]])) stop('Cannot align precomputed UMAP to CHARGE cells.')
+    umap.df <- u[idx, -1L, drop = FALSE]
+  } else if (!is.null(AIT.anndata)) {
+    obsm <- AIT.anndata$obsm
+    candidates <- unique(c(as.character(unlist(AIT.anndata$uns$default_embedding,
+                                               use.names = FALSE)), 'X_umap', names(obsm)[1L]))
+    for (key in candidates[!is.na(candidates) & candidates %in% names(obsm)]) {
+      coords <- obsm[[key]]
+      if (length(dim(coords)) != 2L || ncol(coords) != 2L) next
+      idx <- match(sample.names, obs.ids)
+      if (nrow(coords) != length(obs.ids) || anyNA(idx)) {
+        stop('Cannot align AnnData embedding ', key, ' to CHARGE cells.')
+      }
+      umap.df <- coords[idx, , drop = FALSE]
+      break
     }
-    if(length(embedding)==1){
-      umap.df <- AIT.anndata$obsm[[embedding]][sample.names,]
+  } else if (!is.null(embedding)) {
+    umap.df <- embedding[sample.names, , drop = FALSE]
+  }
+  if (is.null(umap.df)) {
+    if (nrow(rd.dat) == 1L) {
+      umap.df <- matrix(0, 1L, 2L)
+    } else if (nrow(rd.dat) == 2L) {
+      umap.df <- cbind(rd.dat[, 1L], if (ncol(rd.dat) >= 2L) rd.dat[, 2L] else 0)
     } else {
-      umap.df <- umap(rd.dat)$layout
-    }
-  } else {
-    if(is.null(embedding)) {
-      umap.df <- umap(rd.dat)$layout
-    } else {
-      umap.df <- embedding[sample.names,]
+      cfg <- umap::umap.defaults
+      cfg$n_neighbors <- min(cfg$n_neighbors, nrow(rd.dat) - 1L)
+      umap.df <- umap::umap(rd.dat, config = cfg)$layout
     }
   }
   umap.df <- as.data.frame(umap.df)
+  if (nrow(umap.df) != length(sample.names) || ncol(umap.df) < 2L ||
+      !all(vapply(umap.df[1:2], is.numeric, logical(1))) ||
+      any(!is.finite(as.matrix(umap.df[1:2])))) {
+    stop('CHARGE needs two finite numeric embedding coordinates per cell.')
+  }
   rownames(umap.df) <- sample.names
-  
   
   #############################################################
   print('===== Building statistics for the rest of the hierarchy =====')
@@ -358,12 +442,12 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   } else if(weight.by != 'cluster'){
     # NOTE: THIS TREATS EACH CELL WITH THE SAME WEIGHT (e.g., BIGGER CLUSTER GET WEIGHTED HIGHER)
     if(weight.by != 'cell') warning("weight.by is not set to 'cell' or 'cluster'; defaulting to 'cell'.")
-    for (i in 2:length(hierarchy)){
+    for (i in seq_along(hierarchy)[-1L]){
       print(paste(hierarchy[i],'........',i,'of',length(hierarchy)))
-      cluster_vector2 = AIT.anndata$obs[,hierarchy[i]][keep_sample]
+      cluster_vector2 <- metadata[sample.names, hierarchy_old[[hierarchy[i]]], drop = TRUE]
       all_clusters2   = unique(cluster_vector2)
       if(is.factor(all_clusters2))
-        all_clusters2 = levels(all_clusters2)
+        all_clusters2 = levels(droplevels(all_clusters2))
       cluster_factor2 <- factor(cluster_vector2,levels=all_clusters2)
       names(cluster_factor2) <- names(cluster_factor)
       
@@ -373,9 +457,11 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
       print('... sums')
       sums    <- cbind(sums,round(get_cl_sums(t_cell_counts,cluster_factor2)))
       print('... counts')
-      counts  <- cbind(counts,round(get_cl_sums(t_cell_counts>0,cluster_factor2)))
+      counts2 <- round(get_cl_sums(t_cell_counts > 0, cluster_factor2))
+      counts <- cbind(counts, counts2)
       print('... props')
-      props   <- cbind(props,t(t(counts)/as.numeric(count_n)))
+      props <- cbind(props, sweep(as.matrix(counts2), 2L,
+                                  as.numeric(table(cluster_factor2)), '/'))
       print('... means')
       means2  <- get_cl_means(t_norm_counts,cluster_factor2)
       means   <- cbind(means,means2)
@@ -403,111 +489,61 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
   #############################################################
   print("===== Build the constellation plots =====")
   
-  constellation <- list()
-  for (level in hierarchy){
-    print(paste("... creating constellation for",level))
-    cl.cl <- metadata[rownames(rd.dat), hierarchy_old[level]]
-    cl.cl <- as.character(cl.cl)
-    names(cl.cl) <- rownames(rd.dat)
-    result = get_knn_graph(rd.dat, cl=cl.cl, k =50) 
-    
-    ## Select robust edges for plotting
-    knn.cl.df = result$knn.cl.df 
-    knn.cl.df = knn.cl.df %>% group_by(cl.from) %>% mutate(cl.from.rank = rank(-Freq))
-    knn.cl.df = knn.cl.df %>% group_by(cl.to) %>% mutate(cl.to.rank = rank(-Freq))
-    select.knn.cl.df = with(knn.cl.df, knn.cl.df[odds > 1 & pval.log < log(1/100000) & (frac > 0.1 | frac > 0.03 & Freq > 100) & (cl.from.rank < 4| cl.to.rank < 4),])
-    
-    ## Reorganize the cluster_info matrix for the information required for plotConstellation
-    ## --- THIS SECTION NEEDS TO BE EDITED!
-    prefix = level
-    
-    cl.center.df = as.data.frame(get_RD_cl_center(umap.df,cl.cl)) 
-    cl.center.df$x <- cl.center.df$x + runif(length(cl.center.df$x), -0.000001, 0.000001)  # Small jitter
-    cl.center.df$y <- cl.center.df$y + runif(length(cl.center.df$y), -0.000001, 0.000001)  # Small jitter
-    
-    # Optionally expand unusually narrow constellation layouts horizontally 
-    # while preserving the coordinate system used to calculate edge polygons.
-    if(!is.na(target.aspect)){
-      x.range <- diff(range(cl.center.df$x, na.rm = TRUE))
-      y.range <- diff(range(cl.center.df$y, na.rm = TRUE))
-      
-      if (is.finite(x.range) &&
-          is.finite(y.range) &&
-          x.range > 0 &&
-          y.range > 0 &&
-          x.range / y.range < target.aspect) {
-        
-        x.mid <- mean(range(cl.center.df$x, na.rm = TRUE))
-        x.scale <- target.aspect * y.range / x.range
-        
-        cl.center.df$x <- x.mid +
-          (cl.center.df$x - x.mid) * x.scale
+  constellation <- setNames(vector('list', length(hierarchy)), hierarchy)
+  pca.ids <- rownames(rd.dat)
+  if (is.null(pca.ids) || anyDuplicated(pca.ids) ||
+      !all(pca.ids %in% rownames(metadata)) || !all(pca.ids %in% rownames(umap.df))) {
+    stop('Cannot align PCA, metadata and embedding rows by cell ID.')
+  }
+  xy <- as.matrix(umap.df[pca.ids, 1:2, drop = FALSE])
+  for (level in hierarchy) {
+    message('... creating constellation for ', level)
+    cl <- as.character(metadata[pca.ids, hierarchy_old[[level]], drop = TRUE])
+    cl[is.na(cl)] <- 'ZZ_Missing'
+    names(cl) <- pca.ids
+    types <- unique(cl)
+    groups <- factor(cl, levels = types)
+    sizes <- tabulate(as.integer(groups), nbins = length(types))
+    centers <- rowsum(xy, groups, reorder = FALSE) / sizes
+    # Keep the uploaded script's optional horizontal stretch (off by default).
+    if (is.finite(target.aspect) && target.aspect > 0) {
+      xr <- diff(range(centers[, 1L])); yr <- diff(range(centers[, 2L]))
+      if (xr > 0 && yr > 0 && xr / yr < target.aspect) {
+        mid <- mean(range(centers[, 1L]))
+        centers[, 1L] <- mid + (centers[, 1L] - mid) * target.aspect * yr / xr
       }
-    }  
-    
-    ## Define cl.df
-    types <- rownames(cl.center.df)
-    cl.df <- cluster_info[,paste0(level,c("_id","_label","_color"))]
-    cl.df <- cl.df[match(unique(cl.df[,1]),cl.df[,1]),]
-    rownames(cl.df) <- cl.df[,2]
-    cl.df <- cl.df[types,]
-    cl.df$cluster_size <- count_n[types]
-    
-    ## Define cl.center.df (centroids for clusters)
-    cl.center.df$cluster_id    <- cl.df[,1]  # id column
-    cl.center.df$cluster_label <- rownames(cl.df)
-    cl.center.df$cluster_color <- cl.df[,3]  # color column
-    cl.center.df$cluster_size  <- cl.df$cluster_size
-    rownames(cl.center.df)     <- rownames(cl.df)
-    
-    # Set cl as cluster_id since that was used to summarise the edges
-    cl.center.df$cl <- cl.df[,1]  # The _id column
-    
-    # Convert labels to ids 
-    select.knn.cl.df$cl.from <- cl.df[,1][match(select.knn.cl.df$cl.from,cl.df[,2])]
-    select.knn.cl.df$cl.to   <- cl.df[,1][match(select.knn.cl.df$cl.to,cl.df[,2])]
-    
-    # Define the edges (I think that is what tmp.knn.cl.df does???)
-    tmp.cl = cl.center.df$cluster_id
-    tmp.knn.cl.df = select.knn.cl.df %>% filter(cl.from %in% tmp.cl & cl.to %in% tmp.cl)
-    
-    # Create the plot
-    c.plot=try(plot_constellation(tmp.knn.cl.df, 
-                                  cl.center.df=cl.center.df, 
-                                  out.dir=NULL,
-                                  prefix=prefix,
-                                  node.label="cluster_label",
-                                  exxageration=2,
-                                  plot.parts=FALSE,
-                                  return.list = T,
-                                  node.dodge = F,
-                                  label_repel = TRUE,
-                                  label.size = 3,
-                                  plot.height = 15,
-                                  plot.width = 15,
-                                  max_size = 5,
-                                  enable_plotly = TRUE,
-                                  plotly_labels_on_plot = TRUE))
-    if(class(c.plot)[1]=="try-error") {
-      constellation[[level]] <- plot_ly() %>%
-        add_annotations(
-          text = paste("No constellation diagram for",level),
-          x = 0.5, y = 0.5,          # Center coordinates
-          xref = "paper", yref = "paper", # Relative to plot area
-          showarrow = FALSE,
-          font = list(size = 36, color = "black") # Basic font styling
-        ) %>%
-        layout(
-          xaxis = list(visible = FALSE), # Hide X-axis
-          yaxis = list(visible = FALSE), # Hide Y-axis
-          # Optional: make background transparent if embedding or don't want default gray
-          plot_bgcolor = 'rgba(0,0,0,0)',
-          paper_bgcolor = 'white'
-        )
-    } else {
-      constellation[[level]] <- c.plot$constellation
     }
-  } 
+    keys <- paste0(level, c('_id', '_label', '_color'))
+    idx <- match(types, as.character(cluster_info[[keys[2L]]]))
+    if (anyNA(idx)) stop('No annotation at ', level, ' for: ', paste(types[is.na(idx)], collapse = ', '))
+    ids <- cluster_info[[keys[1L]]][idx]
+    centers.df <- data.frame(x = centers[, 1L], y = centers[, 2L],
+                             cl = as.character(ids), cluster_id = ids, cluster_label = types,
+                             cluster_color = as.character(cluster_info[[keys[3L]]][idx]),
+                             cluster_size = sizes, row.names = types)
+    selected <- data.frame(cl.from = character(), cl.to = character(),
+                           Freq = numeric(), frac = numeric())
+    if (length(types) > 1L && length(pca.ids) > 1L) {
+      edges <- get_knn_graph(rd.dat, cl = cl, k = min(50L, length(pca.ids)))$knn.cl.df
+      edges <- edges %>%
+        dplyr::group_by(cl.from) %>% dplyr::mutate(cl.from.rank = rank(-Freq)) %>%
+        dplyr::group_by(cl.to) %>% dplyr::mutate(cl.to.rank = rank(-Freq)) %>%
+        dplyr::ungroup()
+      selected <- dplyr::filter(edges, odds > 1, pval.log < log(1/100000),
+                                frac > 0.1 | (frac > 0.03 & Freq > 100), cl.from.rank < 4 | cl.to.rank < 4)
+      selected$cl.from <- centers.df$cl[match(selected$cl.from, types)]
+      selected$cl.to <- centers.df$cl[match(selected$cl.to, types)]
+    }
+    constellation[[level]] <- tryCatch({
+      plot <- plot_constellation(selected, cl.center.df = centers.df, out.dir = NULL,
+                                 prefix = level, node.label = 'cluster_label', exxageration = 2,
+                                 plot.parts = FALSE, return.list = TRUE, node.dodge = FALSE,
+                                 label_repel = TRUE, label.size = 3, plot.height = 15, plot.width = 15,
+                                 max_size = 5, enable_plotly = TRUE, plotly_labels_on_plot = TRUE)$constellation
+      compact_charge_constellation(plot)
+    }, error = function(e) stop('Constellation failed at ', level, ': ',
+                                conditionMessage(e), call. = FALSE))
+  }
   
   #############################################################
   print("===== Save CHARGE file =====")
@@ -521,7 +557,8 @@ chargeTaxonomy <- function(AIT.anndata = NULL,
     sds,
     props,
     constellation,
-    file = charge.file.name
+    file = charge.file.name,
+    compress = "xz"
   )
   
 }
@@ -564,7 +601,7 @@ chargeTaxonomyFromStats <- function(AIT.file,
 #'  - hierarchy - cell type hierarchy stored in uns$hierarchy, but converted to a corrected ordered character vector
 #'  - cluster_info - a table of cluster information that encodes the hierarchy for building sunburst plots
 #'  - constellation - a list of plotly objects holding the constellation diagrams for each levels of the hierarchy
-#'  **NOTE: This function is tested on "docker://alleninst/scrattch:1.1.4.1". We strongly encourage using this docker environment.**
+#' Validate generated files against a known reference before production use.
 #'
 #' @param AIT.file The location of a reference taxonomy anndata object in AIT format.  Note that for this function the h5ad file must be local.
 #' @param stats.dir A directory where python should write precomputed statistics from chargeTaxonomyHybrid for reading back in. The default is typically fine as thse statistics are not needed if the function runs properly.
@@ -613,7 +650,10 @@ chargeTaxonomyHybrid <- function(AIT.file,
       python.script <- pkg_script
     } else {
       # Fallback for dev / source usage
-      python.script <- file.path(getwd(), "h5ad_to_charge_stats.py")
+      candidates <- file.path(getwd(), c('h5ad_to_charge_stats.py',
+                                         'inst/python/h5ad_to_charge_stats.py'))
+      found <- candidates[file.exists(candidates)]
+      python.script <- if (length(found)) found[[1L]] else candidates[[1L]]
     }
   }
   
@@ -621,7 +661,7 @@ chargeTaxonomyHybrid <- function(AIT.file,
     stop(
       "Could not find h5ad_to_charge_stats.py.\n",
       "Looked for:\n",
-      "  1) system.file('python','h5ad_to_charge_stats.py', package='CHARGE_taxonomy')\n",
+      "  1) system.file('python','h5ad_to_charge_stats.py', package='CHARGE.taxonomy')\n",
       "  2) ", python.script, "\n\n",
       "If developing locally, place h5ad_to_charge_stats.py in your working directory.\n",
       "If using the installed package, ensure it is located at inst/python/h5ad_to_charge_stats.py before install."
@@ -714,7 +754,6 @@ chargeTaxonomyHybrid <- function(AIT.file,
 #' @param bg.alpha alpha to use for edges that are more faint. Default = 0.1
 #' @param coord_fixed Cartesian coordinates with fixed "aspect ratio". See ggplot::coord_fixed. Default is TRUE
 #'  
-#' @import scrattch.bigcat
 #' 
 #' @usage plotting.MGE.constellation <- plot_constellation(knn.cl.df = knn.cl.df, cl.center.df = cl.center.df, out.dir = "data/Constellation_example/plot", node.dodge=TRUE, plot.hull=c(1,2), label_repel=TRUE) 
 
@@ -752,6 +791,7 @@ plot_constellation <- function (knn.cl.df,
                                 plotly_labels_on_plot = FALSE # TRUE for static labels, FALSE for hover only
 ) {
   
+  library(ggplot2)
   library(gridExtra)
   library(cowplot)
   library(Hmisc)
@@ -815,11 +855,16 @@ plot_constellation <- function (knn.cl.df,
   g <- ggplot_build(p.nodes)
   dots <-g[["data"]][[1]] #dataframe with geom_point size, color, coords
   
-  nodes <- left_join(cl.center.df, dots, by=c("x","y")) %>% ungroup()
+  # Retain one node per type even when centroids coincide.
+  stopifnot(nrow(dots) == nrow(cl.center.df),
+            isTRUE(all.equal(dots$x, cl.center.df$x, check.attributes = FALSE)),
+            isTRUE(all.equal(dots$y, cl.center.df$y, check.attributes = FALSE)))
+  nodes <- cl.center.df
+  nodes$size <- dots$size
   
   ###==== if node.dodge==TRUE new xy coords are calculated for overlapping nodes.
   
-  if (node.dodge==TRUE){
+  if (node.dodge == TRUE && nrow(nodes) > 1L){
     # ... (node dodging logic - unchanged, assuming it works) ...
     # This section contains nested loops for node dodging. It's computationally
     # intensive and might be a bottleneck for large datasets.
@@ -907,205 +952,50 @@ plot_constellation <- function (knn.cl.df,
   }
   
   
-  ###==== prepare data for plotting of edges between nodes
-  
-  ##filter out all edges that are <5% of total for that cluster
-  #knn.cl <- knn.cl.df[knn.cl.df$frac >0.05,] #1337 lines
-  knn.cl <- knn.cl.df
-  ##from knn.cl data frame remove all entries within cluster edges.
-  knn.cl.d <- knn.cl[!(knn.cl$cl.from == knn.cl$cl.to),]
-  nodes$cl=as.character(nodes$cl)
-  knn.cl.d$cl.from <- as.character(knn.cl.d$cl.from)
-  knn.cl.d$cl.to <- as.character(knn.cl.d$cl.to)
-  
-  knn.cl.d <- left_join(knn.cl.d, select(nodes, cl, node.width), by=c("cl.from"="cl"))
-  colnames(knn.cl.d)[colnames(knn.cl.d)=="node.width"]<- "node.pt.from"
-  knn.cl.d$node.pt.to <- ""
-  knn.cl.d$Freq.to <- ""
-  knn.cl.d$frac.to <- ""
-  
-  
-  #bidirectional
-  knn.cl.bid <- NULL
-  for (i in 1:nrow(knn.cl.d)) {
-    
-    line <- subset(knn.cl.d[i,])
-    r <- subset(knn.cl.d[i:nrow(knn.cl.d),])
-    r <- r[(line$cl.from == r$cl.to & line$cl.to == r$cl.from ),]
-    
-    if (dim(r)[1] != 0) {
-      line$Freq.to <- r$Freq
-      line$node.pt.to <- r$node.pt.from
-      line$frac.to <- r$frac
-      knn.cl.bid <- rbind(knn.cl.bid, line)
-    }
-    #print(i)
-  }
-  
-  #unidirectional
-  knn.cl.uni <- NULL
-  for (i in 1:nrow(knn.cl.d)) {
-    
-    line <- subset(knn.cl.d[i,])
-    r <- knn.cl.d[(line$cl.from == knn.cl.d$cl.to & line$cl.to == knn.cl.d$cl.from ),]
-    
-    if (dim(r)[1] == 0) {
-      knn.cl.uni <- rbind(knn.cl.uni, line)
-    }
-    #print(i)
-  }
-  
-  
-  #min frac value = 0.01
-  knn.cl.uni$node.pt.to <- nodes$node.width[match(knn.cl.uni$cl.to, nodes$cl)]
-  knn.cl.uni$Freq.to <- 1
-  knn.cl.uni$frac.to <- 0.01
-  knn.cl.lines <- rbind(knn.cl.bid, knn.cl.uni)
-  
-  
-  ###==== create line segments
-  
-  line.segments <- knn.cl.lines %>% select(cl.from, cl.to)
+  # Build one ribbon per pair, using both directional widths if present.
   nodes$cl <- as.character(nodes$cl)
-  line.segments <- left_join(line.segments,select(nodes, x, y, cl), by=c("cl.from"="cl"))
-  line.segments <- left_join(line.segments,select(nodes, x, y, cl), by=c("cl.to"="cl"))
-  colnames(line.segments) <- c("cl.from", "cl.to", "x.from", "y.from", "x.to", "y.to")
-  
-  line.segments <- data.frame(line.segments,
-                              freq.from = knn.cl.lines$Freq,
-                              freq.to = knn.cl.lines$Freq.to,
-                              frac.from = knn.cl.lines$frac,
-                              frac.to =  knn.cl.lines$frac.to,
-                              node.pt.from =  knn.cl.lines$node.pt.from,
-                              node.pt.to = knn.cl.lines$node.pt.to)
-  
-  
-  ##from points to native coords
-  line.segments$node.size.from <- line.segments$node.pt.from/10
-  line.segments$node.size.to <- line.segments$node.pt.to/10
-  
-  
-  line.segments$line.width.from <- line.segments$node.size.from*line.segments$frac.from
-  line.segments$line.width.to <- line.segments$node.size.to*line.segments$frac.to
-  
-  ##max fraction to max point size
-  line.segments$line.width.from<- (line.segments$frac.from/max(line.segments$frac.from, line.segments$frac.to))*line.segments$node.size.from
-  
-  line.segments$line.width.to<- (line.segments$frac.to/max(line.segments$frac.from, line.segments$frac.to))*line.segments$node.size.to
-  
-  
-  ###=== create edges, exaggerated width
-  
-  line.segments$ex.line.from <-line.segments$line.width.from #true to frac
-  line.segments$ex.line.to <-line.segments$line.width.to #true to frac
-  
-  line.segments$ex.line.from <- pmin((line.segments$line.width.from*exxageration),line.segments$node.size.from) #exxagerated width
-  line.segments$ex.line.to <- pmin((line.segments$line.width.to*exxageration),line.segments$node.size.to) #exxagerated width
-  
-  
-  line.segments <- na.omit(line.segments)
-  
-  print("calculating edges")
-  
-  # Assuming edgeMaker, perpStart, perpMid, perpEnd are defined elsewhere in your environment
-  # They are not in the provided function, but necessary for allEdges and poly.Edges
-  # For this example, I'll assume they work correctly and 'allEdges' and 'poly.Edges' are formed.
-  # Placeholder for edgeMaker if it's not defined
-  if (!exists("edgeMaker")) {
-    edgeMaker <- function(i, len, curved, line.segments) {
-      # This is a placeholder; replace with your actual edgeMaker function
-      # It should return a data frame with x, y, fraction, and Group
-      data.frame(x = runif(len), y = runif(len), fraction = runif(len),
-                 Group = paste(line.segments$cl.from[i], line.segments$cl.to[i], sep = ">"))
-    }
+  if (anyNA(nodes$cl) || anyDuplicated(nodes$cl)) stop('Node IDs must be unique.')
+  from <- match(as.character(knn.cl.df$cl.from), nodes$cl)
+  to <- match(as.character(knn.cl.df$cl.to), nodes$cl)
+  frac <- knn.cl.df$frac
+  keep <- !is.na(from) & !is.na(to) & from != to & is.finite(frac) & frac > 0
+  from <- from[keep]; to <- to[keep]; frac <- frac[keep]
+  rev.idx <- match(paste(to, from, sep = ':'), paste(from, to, sep = ':'))
+  take <- which(is.na(rev.idx) | seq_along(rev.idx) < rev.idx)
+  f <- from[take]; t <- to[take]
+  frac.to <- frac[rev.idx[take]]
+  frac.to[is.na(frac.to)] <- 0.01
+  line.segments <- data.frame(cl.from = nodes$cl[f], cl.to = nodes$cl[t],
+                              x.from = nodes$x[f], y.from = nodes$y[f], x.to = nodes$x[t], y.to = nodes$y[t],
+                              frac.from = frac[take], frac.to = frac.to,
+                              node.size.from = nodes$node.width[f] / 10, node.size.to = nodes$node.width[t] / 10)
+  line.segments <- line.segments[with(line.segments, x.from != x.to | y.from != y.to), , drop = FALSE]
+  poly.Edges <- data.frame(x = numeric(), y = numeric(), Group = character(),
+                           g1 = character(), g2 = character())
+  if (nrow(line.segments)) {
+    max.frac <- max(line.segments$frac.from, line.segments$frac.to)
+    line.segments$ex.line.from <- with(line.segments,
+                                       pmin(frac.from / max.frac * node.size.from * exxageration, node.size.from))
+    line.segments$ex.line.to <- with(line.segments,
+                                     pmin(frac.to / max.frac * node.size.to * exxageration, node.size.to))
+    poly.Edges <- do.call(rbind, lapply(seq_len(nrow(line.segments)), function(i) {
+      path <- edgeMaker(i, len = 50L, curved = curved, line.segments = line.segments)
+      n <- nrow(path)
+      corners <- vapply(seq_len(n), function(j) {
+        ix <- seq.int(max(1L, j - 1L), min(n, j + 1L))
+        perp.fn <- if (j == 1L) perpStart else if (j == n) perpEnd else perpMid
+        z <- perp.fn(path$x[ix], path$y[ix], path$fraction[j] / 2)
+        c(z[1L, ], z[2L, ])
+      }, numeric(4L))
+      data.frame(x = c(corners[1L, ], rev(corners[3L, ])),
+                 y = c(corners[2L, ], rev(corners[4L, ])), Group = as.character(i),
+                 g1 = line.segments$cl.from[i], g2 = line.segments$cl.to[i])
+    }))
   }
-  if (!exists("perpStart")) {
-    perpStart <- function(x_coords, y_coords, width) {
-      # Placeholder for perpStart
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[1], y_coords[1]), each = 2)
-    }
-  }
-  if (!exists("perpMid")) {
-    perpMid <- function(x_coords, y_coords, width) {
-      # Placeholder for perpMid
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[2], y_coords[2]), each = 2)
-    }
-  }
-  if (!exists("perpEnd")) {
-    perpEnd <- function(x_coords, y_coords, width) {
-      # Placeholder for perpEnd
-      matrix(rnorm(4), ncol = 2) * width + rep(c(x_coords[2], y_coords[2]), each = 2)
-    }
-  }
-  
-  
-  print(paste("Number of rows in line.segments:", nrow(line.segments)))
-  if (nrow(line.segments) == 0) {
-    stop("Error: The 'line.segments' data frame is empty. No edges to plot.")
-  }
-  
-  allEdges <- lapply(1:nrow(line.segments), edgeMaker, len = 50, curved = curved, line.segments=line.segments) # Reduced len for faster example
-  allEdges <- do.call(rbind, allEdges)  # a fine-grained path with bend
-  
-  
-  groups <- unique(allEdges$Group)
-  
-  poly.Edges <- data.frame(x=numeric(), y=numeric(), Group=character(),g1=integer(), g2=integer(),stringsAsFactors=FALSE)
-  imax <- as.numeric(length(groups))
-  
-  # Limiting iterations for poly.Edges generation for a faster example run
-  # In your actual use, remove or adjust this limit.
-  # max_poly_edges_iter <- min(imax, 50) # Process max 50 groups for quick testing
-  
-  for(i in 1:imax) {
-    #for(i in 1:max_poly_edges_iter) { # Use this line for faster testing
-    select.group <- groups[i]
-    select.edge <- allEdges[allEdges$Group %in% select.group,]
-    
-    x <- select.edge$x
-    y <- select.edge$y
-    w <- select.edge$fraction
-    
-    N <- length(x)
-    leftx <- numeric(N)
-    lefty <- numeric(N)
-    rightx <- numeric(N)
-    righty <- numeric(N)
-    
-    ## Start point
-    perps <- perpStart(x[1:2], y[1:2], w[1]/2)
-    leftx[1] <- perps[1, 1]
-    lefty[1] <- perps[1, 2]
-    rightx[1] <- perps[2, 1]
-    righty[1] <- perps[2, 2]
-    
-    ### mid points
-    for (ii in 2:(N - 1)) {
-      seq <- (ii - 1):(ii + 1)
-      perps <- perpMid(as.numeric(x[seq]), as.numeric(y[seq]), w[ii]/2)
-      leftx[ii] <- perps[1, 1]
-      lefty[ii] <- perps[1, 2]
-      rightx[ii] <- perps[2, 1]
-      righty[ii] <- perps[2, 2]
-    }
-    ## Last control point
-    perps <- perpEnd(x[(N-1):N], y[(N-1):N], w[N]/2)
-    leftx[N] <- perps[1, 1]
-    lefty[N] <- perps[1, 2]
-    rightx[N] <- perps[2, 1]
-    righty[N] <- perps[2, 2]
-    
-    lineleft <- data.frame(x=leftx, y=lefty)
-    lineright <- data.frame(x=rightx, y=righty)
-    lineright <- lineright[nrow(lineright):1, ]
-    lines.lr <- rbind(lineleft, lineright)
-    lines.lr$Group <- select.group
-    lines.lr[c("g1","g2")] <- as.integer(as.character(stringr::str_split_fixed(lines.lr$Group, '>', 2)))
-    
-    poly.Edges <- rbind(poly.Edges,lines.lr)
-    
-    #Sys.sleep(0.01) # Commented out for faster testing
-    #cat("\r", i, "of", imax) # Commented out for cleaner output
+  if (is.numeric(nodes$cluster_id) && all(nodes$cl == as.character(nodes$cluster_id)) &&
+      all(nodes$cluster_id == as.integer(nodes$cluster_id))) {
+    poly.Edges$g1 <- as.integer(poly.Edges$g1)
+    poly.Edges$g2 <- as.integer(poly.Edges$g2)
   }
   
   if (plot.parts == TRUE && !is.null(out.dir)) {
@@ -1128,13 +1018,14 @@ plot_constellation <- function (knn.cl.df,
   
   
   if(!is.null(edge_mark_list)){
+    edge_marking <- match.arg(edge_marking)
     if(edge_marking == "dim"){
-      poly.Edges$alpha_plot <- fg.alpha # Use a different column name to avoid conflict
+      poly.Edges$alpha_plot <- rep(fg.alpha, nrow(poly.Edges)) # Use a different column name to avoid conflict
       poly.Edges$alpha_plot[poly.Edges$g1 %in% edge_mark_list] <- bg.alpha
       poly.Edges$alpha_plot[poly.Edges$g2 %in% edge_mark_list] <- bg.alpha
       
     } else if(edge_marking == "highlight"){
-      poly.Edges$alpha_plot <- bg.alpha # Use a different column name
+      poly.Edges$alpha_plot <- rep(bg.alpha, nrow(poly.Edges)) # Use a different column name
       poly.Edges$alpha_plot[poly.Edges$g1 %in% edge_mark_list] <- fg.alpha
       poly.Edges$alpha_plot[poly.Edges$g2 %in% edge_mark_list] <- fg.alpha
       
@@ -1143,20 +1034,20 @@ plot_constellation <- function (knn.cl.df,
     }
     
   } else{
-    poly.Edges$alpha_plot <- fg.alpha # Use a different column name
+    poly.Edges$alpha_plot <- rep(fg.alpha, nrow(poly.Edges)) # Use a different column name
   }
   
   # --- FIX 2: Consolidate plot.all creation and fix alpha/text logic ---
   # Define the base plot structure once
-  base_plot <- ggplot() +
-    geom_polygon(data=poly.Edges,
-                 aes(x=x, y=y, group=Group, alpha=alpha_plot, # Use new alpha_plot variable
-                     # Add hover text for polygons (edges)
-                     text = paste0("From: ", g1, "<br>To: ", g2)),
-                 fill = "grey60") + # Explicit fill for polygons
-    scale_alpha_identity() + # FIX 2 (Crucial): Use scale_alpha_identity() for direct alpha values
-    theme_void() +
-    theme(legend.position = "none") # General theme for plot.all
+  base_plot <- ggplot() + theme_void() + theme(legend.position = "none")
+  if (nrow(poly.Edges)) {
+    base_plot <- base_plot + geom_polygon(data=poly.Edges,
+                                          aes(x=x, y=y, group=Group, alpha=alpha_plot, # Use new alpha_plot variable
+                                              # Add hover text for polygons (edges)
+                                              text = paste0("From: ", g1, "<br>To: ", g2)),
+                                          fill = "grey60") + # Explicit fill for polygons
+      scale_alpha_identity()
+  }
   
   # Add geom_point for nodes
   # FIX 3: Add 'text' aesthetic to geom_point for plotly hover info
@@ -1206,7 +1097,7 @@ plot_constellation <- function (knn.cl.df,
     base_plot <- base_plot +
       geom_mark_hull(data=nodes,
                      concavity = 8,
-                     radius = unit(5,"mm"),
+                     radius = grid::unit(5,"mm"),
                      aes(filter = nodes$clade_id %in% plot.hull,x, y,
                          color=nodes$clade_color))
   }
@@ -1252,9 +1143,6 @@ plot_constellation <- function (knn.cl.df,
   # --- FIX 5: Conditional ggplotly conversion and text addition ---
   if (enable_plotly) {
     #plotly_plot <- ggplotly(plot.all, tooltip = "text")
-    message("Converting plot.all to a ggplot grob")
-    test_grob <- ggplot2::ggplotGrob(plot.all)
-    
     message("Converting plot.all to Plotly")
     plotly_plot <- plotly::ggplotly(plot.all, tooltip = "text")  # Use "text" for custom tooltips
     
@@ -1351,20 +1239,20 @@ plot_constellation <- function (knn.cl.df,
            fill=guide_legend(ncol=leg.col.nr)) +
     theme(legend.title = element_text(size = 6),
           legend.text  = element_text(size = 6),
-          legend.key.size = unit(0.5, "lines"))
+          legend.key.size = grid::unit(0.5, "lines"))
   
   cl.center.legend <- cowplot::get_legend(cl.center)
   
   
-  width.1 <- max(line.segments$frac.from, line.segments$frac.to)
+  width.1 <- max(c(0, line.segments$frac.from, line.segments$frac.to))
   width.05 <- width.1/2
   width.025 <- width.1/4
-  edge.width.data <- tibble(node.width = c(1, 1, 1),
-                            x = c(2, 2, 2),
-                            y = c(5, 3.5, 2),
-                            line.width = c(1, 0.5, 0.25),
-                            fraction = c(100, 50, 25),
-                            frac.ex = c(width.1, width.05, width.025))
+  edge.width.data <- tibble::tibble(node.width = c(1, 1, 1),
+                                    x = c(2, 2, 2),
+                                    y = c(5, 3.5, 2),
+                                    line.width = c(1, 0.5, 0.25),
+                                    fraction = c(100, 50, 25),
+                                    frac.ex = c(width.1, width.05, width.025))
   edge.width.data$fraction.ex <- round((edge.width.data$frac.ex *
                                           100), digits = 0)
   poly.positions <- data.frame(id = rep(c(1, 2, 3), each = 4),
@@ -1395,6 +1283,9 @@ plot_constellation <- function (knn.cl.df,
       geom_text(data = edge.width.data, aes(x = 2.7, y = y, label = fraction, hjust = 0, vjust = 0.5)) +
       annotate("text", x = 2, y = 6, label = "Fraction of edges \n to node")
   }
+  if (!nrow(line.segments)) edge.width.legend <- ggplot() + theme_void()
+  if (is.null(dot.size.legend)) dot.size.legend <- grid::nullGrob()
+  if (is.null(cl.center.legend)) cl.center.legend <- grid::nullGrob()
   layout_legend <- rbind(c(1, 3, 3, 3, 3),
                          c(2, 3, 3, 3, 3))
   if (plot.parts == TRUE & !is.null(out.dir)) {
@@ -1616,10 +1507,11 @@ loadTaxonomy = function(taxonomyDir = getwd(),
   }
   
   ## Load from directory name input 
-  if(file.exists(file.path(taxonomyDir, anndata_file))){
+  h5ad.path <- if (file.exists(anndata_file)) anndata_file else file.path(taxonomyDir, anndata_file)
+  if(file.exists(h5ad.path)){
     print("Loading reference taxonomy into memory from .h5ad")
     ## Load taxonomy directly!
-    AIT.anndata = read_h5ad(file.path(taxonomyDir, anndata_file))
+    AIT.anndata = anndata::read_h5ad(h5ad.path)
     ## Default mode is always standard
     AIT.anndata$uns$mode = "standard"
     ##
@@ -1633,7 +1525,7 @@ loadTaxonomy = function(taxonomyDir = getwd(),
     #   }))
     # }
     if(("taxonomyName" %in% colnames(AIT.anndata$obs)) & (!"title" %in% colnames(AIT.anndata$obs))){
-      AIT.anndata$obs$title = anndata_file$obs$taxonomyName
+      AIT.anndata$obs$title = AIT.anndata$obs$taxonomyName
     }
     ## Ensure anndata is in scrattch.mapping format
     # if(!checkTaxonomy(AIT.anndata,log.file.path)){
@@ -1678,7 +1570,7 @@ loadTaxonomy = function(taxonomyDir = getwd(),
 #' @export 
 log2CPM_byRow <- function (counts, sf = NULL, denom = 1e+06, offset=1){
   if(!("dgCMatrix" %in% as.character(class(counts))))
-    counts <- as(counts, "dgCMatrix")
+    counts <- methods::as(methods::as(counts, "dMatrix"), "CsparseMatrix")
   if (is.null(sf)) {
     sf <- Matrix::rowSums(counts)
   }
@@ -2201,7 +2093,7 @@ group_annotations <- function(df, sample_col = "cell_id", keep_order = TRUE) {
   anno_cols <- c(paste0(rep(bases,each=3),c("_id","_label","_color")))
   extras <- setdiff(names(df),anno_cols)
   
-  anno <- select(df,one_of(c(sample_col,anno_cols,extras)))
+  df[, intersect(unique(c(sample_col, anno_cols, extras)), names(df)), drop = FALSE]
   
 }
 
@@ -2231,7 +2123,7 @@ get_knn_graph <- function(rd.dat,
                           mc.cores=10)
 {
   if(is.null(knn.result)){
-    ref.rd.dat = rd.dat[ref.cells,]
+    ref.rd.dat = rd.dat[ref.cells, , drop = FALSE]
     knn.result = get_knn_batch(rd.dat, ref.rd.dat, k, method=method, batch.size=10000, mc.cores=mc.cores, transposed=FALSE, return.distance=TRUE)
   }
   knn  = knn.result[[1]]
@@ -2374,7 +2266,11 @@ subsampleCells <- function(cluster.names, subSamp = 25, seed = 5, use.historical
 .charge_cluster_design <- function(mat, cl) {
   if (!is.factor(cl)) cl <- setNames(factor(cl), names(cl))
   if (is.null(names(cl)) && ncol(mat) == length(cl)) names(cl) <- colnames(mat)
-  if (length(cl) != ncol(mat)) stop("For CHARGE cluster statistics, length(cl) must equal ncol(mat).")
+  if (length(cl) != ncol(mat) || anyNA(cl)) {
+    stop('CHARGE needs one nonmissing group per matrix column.', call. = FALSE)
+  }
+  if (!is.null(names(cl)) && !is.null(colnames(mat)) &&
+      !identical(names(cl), colnames(mat))) stop('CHARGE cluster labels and matrix columns are misaligned.')
   Matrix::sparseMatrix(
     i = seq_along(cl), j = as.integer(cl), x = 1,
     dims = c(length(cl), nlevels(cl)),
@@ -2386,7 +2282,7 @@ subsampleCells <- function(cluster.names, subSamp = 25, seed = 5, use.historical
 get_cl_sums <- function(mat, cl) {
   design <- .charge_cluster_design(mat, cl)
   result <- mat %*% design
-  colnames(result) <- colnames(design)
+  dimnames(result) <- list(rownames(mat), colnames(design))
   result
 }
 

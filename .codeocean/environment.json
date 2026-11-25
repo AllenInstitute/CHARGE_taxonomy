@@ -19,10 +19,12 @@
 					"version": "4:11.2.0-1ubuntu1"
 				},
 				{
-					"name": "git"
+					"name": "git",
+					"version": "1:2.34.1-1ubuntu1.18"
 				},
 				{
-					"name": "libcurl4-openssl-dev"
+					"name": "libcurl4-openssl-dev",
+					"version": "7.81.0-1ubuntu1.30"
 				},
 				{
 					"name": "libglpk-dev",
@@ -49,7 +51,8 @@
 					"version": "3.0.2-0ubuntu1.30"
 				},
 				{
-					"name": "libxml2-dev"
+					"name": "libxml2-dev",
+					"version": "2.9.13+dfsg-1ubuntu0.14"
 				},
 				{
 					"name": "zlib1g-dev",

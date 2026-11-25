@@ -1,4 +1,4 @@
-# hash:sha256:05643c60610d7c36e253ae6cbcbb1bcf0901710c79c2473216eb0eff024faba9
+# hash:sha256:a954aab69542710c14c553ba11f6eb275960e62d911376f1badcc559ec970aff
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/py-r:python3.10.12-R4.2.3-IRkernel-ubuntu22.04
 
@@ -14,15 +14,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential=12.9ubuntu3 \
         gfortran=4:11.2.0-1ubuntu1 \
-        git \
-        libcurl4-openssl-dev \
+        git=1:2.34.1-1ubuntu1.18 \
+        libcurl4-openssl-dev=7.81.0-1ubuntu1.30 \
         libglpk-dev=5.0-1 \
         libgmp-dev=2:6.2.1+dfsg-3ubuntu1 \
         libhdf5-dev=1.10.7+repack-4ubuntu2 \
         liblapack-dev=3.10.0-2ubuntu1 \
         libopenblas-dev=0.3.20+ds-1 \
         libssl-dev=3.0.2-0ubuntu1.30 \
-        libxml2-dev \
+        libxml2-dev=2.9.13+dfsg-1ubuntu0.14 \
         zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2 \
     && rm -rf /var/lib/apt/lists/*
 
