@@ -10,6 +10,10 @@
 			"mount": "HMBA_SpC_AiT_MMC"
 		},
 		{
+			"id": "6f226b41-79cf-46b3-8fb3-397c2e2d43e4",
+			"mount": "SEAAD_multiregion"
+		},
+		{
 			"id": "db9f5940-3795-4d30-931b-806a9340b055",
 			"mount": "wb_subsample"
 		}
